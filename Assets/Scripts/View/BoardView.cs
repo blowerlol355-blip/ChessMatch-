@@ -94,6 +94,57 @@ namespace ChessBalatro
             {
                 gameObject.AddComponent<MasterSelectionUI>();
             }
+
+            if (FindAnyObjectByType<SettingsManager>() == null)
+            {
+                GameObject smObj = new GameObject("SettingsManager");
+                smObj.AddComponent<SettingsManager>();
+            }
+
+            if (FindAnyObjectByType<PieceSkinManager>() == null)
+            {
+                GameObject skinObj = new GameObject("PieceSkinManager");
+                skinObj.AddComponent<PieceSkinManager>();
+            }
+
+            if (GetComponent<TutorialLessonManager>() == null && FindAnyObjectByType<TutorialLessonManager>() == null)
+            {
+                gameObject.AddComponent<TutorialLessonManager>();
+            }
+
+            if (GetComponent<TutorialController>() == null && FindAnyObjectByType<TutorialController>() == null)
+            {
+                gameObject.AddComponent<TutorialController>();
+            }
+
+            if (GetComponent<TutorialUI>() == null && FindAnyObjectByType<TutorialUI>() == null)
+            {
+                gameObject.AddComponent<TutorialUI>();
+            }
+
+            if (FindAnyObjectByType<GameBackdrop>() == null)
+            {
+                GameBackdrop.EnsureBackdrop();
+            }
+
+            // Sincronizar tema con el Skin activo de PieceSkinManager
+            if (PieceSkinManager.Instance != null && PieceSkinManager.Instance.ActiveTheme != null)
+            {
+                pieceTheme = PieceSkinManager.Instance.ActiveTheme;
+            }
+            if (PieceSkinManager.Instance != null)
+            {
+                PieceSkinManager.Instance.OnSkinEquipped -= HandleSkinEquipped;
+                PieceSkinManager.Instance.OnSkinEquipped += HandleSkinEquipped;
+            }
+        }
+
+        private void OnDestroy()
+        {
+            if (PieceSkinManager.Instance != null)
+            {
+                PieceSkinManager.Instance.OnSkinEquipped -= HandleSkinEquipped;
+            }
         }
 
         private void Start()
@@ -249,6 +300,21 @@ namespace ChessBalatro
             }
 
             Sprite tileSpriteToUse = squareSprite != null ? squareSprite : GetOrCreateProceduralSprite();
+
+            // Marco o respaldo oscuro para resaltar el tablero de ajedrez sobre la ilustración de fondo
+            Transform existingFrame = transform.Find("BoardFrameBacking");
+            if (existingFrame == null)
+            {
+                GameObject frameObj = new GameObject("BoardFrameBacking");
+                frameObj.transform.SetParent(transform);
+                frameObj.transform.localPosition = new Vector3(0, 0, 0.05f);
+                var sr = frameObj.AddComponent<SpriteRenderer>();
+                sr.sprite = tileSpriteToUse;
+                sr.color = new Color(0.04f, 0.06f, 0.09f, 0.90f);
+                sr.sortingOrder = -5;
+                float frameSize = BoardState.BoardSize * tileSize + 0.35f;
+                frameObj.transform.localScale = new Vector3(frameSize, frameSize, 1f);
+            }
 
             for (int file = 0; file < BoardState.BoardSize; file++)
             {
@@ -514,6 +580,63 @@ namespace ChessBalatro
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Cambia el tema visual activo de las piezas y refresca los sprites en el tablero.
+        /// </summary>
+        public void SetPieceTheme(PieceTheme newTheme)
+        {
+            if (newTheme == null) return;
+            pieceTheme = newTheme;
+            RefreshPieceThemes();
+        }
+
+        private void HandleSkinEquipped(PieceSpriteLibrary library)
+        {
+            if (library != null && library.Theme != null)
+            {
+                SetPieceTheme(library.Theme);
+            }
+        }
+
+        /// <summary>
+        /// Carga una posición arbitraria o reducida en el tablero (esencial para lecciones del Modo Educativo).
+        /// </summary>
+        public void LoadCustomPosition(BoardState customState)
+        {
+            if (customState == null) return;
+            GenerateBoard();
+            BoardState = customState;
+
+            // Desuscribir anteriores para evitar duplicados
+            BoardState.OnCheck -= HandleOnCheck;
+            BoardState.OnCheckmate -= HandleOnCheckmate;
+            BoardState.OnStalemate -= HandleOnStalemate;
+            BoardState.OnMoveExecuted -= HandleOnCoreMoveExecuted;
+
+            BoardState.OnCheck += HandleOnCheck;
+            BoardState.OnCheckmate += HandleOnCheckmate;
+            BoardState.OnStalemate += HandleOnStalemate;
+            BoardState.OnMoveExecuted += HandleOnCoreMoveExecuted;
+
+            isWhiteInCheck = false;
+            isBlackInCheck = false;
+            isCheckmate = false;
+            isStalemate = false;
+            lastMoveNotation = "Ninguna";
+            pgnHistory = "";
+            currentTurnDisplay = customState.CurrentTurn == PieceColor.White ? "Blancas" : "Negras";
+
+            // Sincronizar aspecto activo antes de instanciar piezas
+            if (PieceSkinManager.Instance != null && PieceSkinManager.Instance.ActiveTheme != null)
+            {
+                pieceTheme = PieceSkinManager.Instance.ActiveTheme;
+            }
+
+            SpawnAllPieces();
+            UpdateCheckHighlight();
+            OnGameInitialized?.Invoke(BoardState);
         }
 
         [ContextMenu("Clear All")]

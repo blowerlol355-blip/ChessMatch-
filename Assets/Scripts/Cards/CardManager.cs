@@ -27,11 +27,14 @@ namespace ChessBalatro
         [SerializeField] private CardHandView handView;
         [SerializeField] private Canvas targetCanvas;
 
+        public static CardManager Instance { get; private set; }
+
         // Estado activo durante el turno
         private readonly List<CardView> _activeCardViews = new List<CardView>();
         private readonly List<ICardEffect> _activeEffects = new List<ICardEffect>();
 
         public int PlayerEnergy => playerEnergy;
+        public CardHandView HandView => handView;
         public IReadOnlyList<CardView> ActiveCardViews => _activeCardViews;
         public IReadOnlyList<ICardEffect> ActiveEffects => _activeEffects;
 
@@ -42,6 +45,16 @@ namespace ChessBalatro
 
         private void Awake()
         {
+            if (Instance == null)
+            {
+                Instance = this;
+            }
+            else if (Instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
+
             if (boardView == null) boardView = FindAnyObjectByType<BoardView>();
             if (inputHandler == null && boardView != null) inputHandler = boardView.InputHandler;
             if (inputHandler == null) inputHandler = FindAnyObjectByType<BoardInputHandler>();
@@ -63,6 +76,10 @@ namespace ChessBalatro
 
         private void OnDestroy()
         {
+            if (Instance == this)
+            {
+                Instance = null;
+            }
             UnsubscribeFromTurnEvents();
         }
 
@@ -216,6 +233,7 @@ namespace ChessBalatro
 
             // 3. Cartas de prueba predeterminadas complementarias
             TurboPawnCardData turboPawn = TurboPawnCardData.CreateInstance();
+            turboPawn.CardSprite = Resources.Load<Sprite>("Pieces/white_pawn");
             handView.AddCardToHand(turboPawn, this);
 
             CardData knightBoost = ScriptableObject.CreateInstance<CardData>();
@@ -226,6 +244,7 @@ namespace ChessBalatro
                 CardRarity.Rare,
                 new KnightBoostEffect()
             );
+            knightBoost.CardSprite = Resources.Load<Sprite>("Pieces/white_knight");
             handView.AddCardToHand(knightBoost, this);
         }
 
@@ -297,6 +316,12 @@ namespace ChessBalatro
 
             _activeCardViews.Add(cardView);
             cardView.SetActivated(true);
+            cardView.PlaySelectAndDisappearAnimation();
+
+            if (handView != null)
+            {
+                handView.ReorganizeHand();
+            }
 
             // Requisito 4: Actualizar inmediatamente los movimientos disponibles en el tablero
             if (inputHandler != null)
@@ -339,6 +364,12 @@ namespace ChessBalatro
 
             _activeCardViews.Remove(cardView);
             cardView.SetActivated(false);
+            cardView.PlayReturnToHandAnimation();
+
+            if (handView != null)
+            {
+                handView.ReorganizeHand();
+            }
 
             // Actualizar tablero de inmediato
             if (inputHandler != null)
@@ -385,14 +416,14 @@ namespace ChessBalatro
             }
             _activeEffects.Clear();
 
-            // 2. Animar consumo y retirada visual de la carta utilizada
+            // 2. Animar consumo destructivo definitivo de la carta utilizada
             for (int i = 0; i < _activeCardViews.Count; i++)
             {
                 var cv = _activeCardViews[i];
                 if (cv != null)
                 {
                     cv.SetActivated(false);
-                    cv.OnTurnEndAfterUsed();
+                    cv.PlayDestroyBurnoutAnimation();
                     if (handView != null)
                     {
                         handView.RemoveCardFromHand(cv);

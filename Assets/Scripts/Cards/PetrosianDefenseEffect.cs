@@ -18,6 +18,17 @@ namespace ChessBalatro
         public static event System.Action<BoardCoord> OnShieldActivated;
         public static event System.Action             OnShieldDeactivated;
 
+        /// <summary>
+        /// Indica si el Escudo de Petrosián está actualmente activo en el turno.
+        /// Utilizado por MoveValidator y BoardState para neutralizar la condición de jaque.
+        /// </summary>
+        public static bool IsShieldActive { get; private set; } = false;
+
+        public static void ForceReset()
+        {
+            IsShieldActive = false;
+        }
+
         private bool _isActive = false;
 
         // ── ICardEffect ────────────────────────────────────────────────────────────────────────────
@@ -34,6 +45,7 @@ namespace ChessBalatro
             if (board == null) return;
 
             _isActive = true;
+            IsShieldActive = true;
 
             // Localizar la posición del Rey blanco para anclar el escudo visual
             BoardCoord kingCoord = FindKingCoord(board, PieceColor.White);
@@ -57,6 +69,7 @@ namespace ChessBalatro
             if (_isActive)
             {
                 _isActive = false;
+                IsShieldActive = false;
                 Debug.Log("<color=#FFD700>[PetrosianDefenseEffect] Escudo disuelto al finalizar el turno.</color>");
                 OnShieldDeactivated?.Invoke();
             }

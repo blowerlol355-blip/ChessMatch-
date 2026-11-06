@@ -34,6 +34,7 @@ namespace ChessBalatro
             data.Cost = 3;
             data.Rarity = CardRarity.Common;
             data.Effect = new TurboPawnEffect();
+            data.CardSprite = Resources.Load<Sprite>("Pieces/white_pawn");
             return data;
         }
     }

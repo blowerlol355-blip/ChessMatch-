@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace ChessBalatro
@@ -16,6 +17,30 @@ namespace ChessBalatro
     }
 
     /// <summary>
+    /// Modos de juego disponibles en ChessMatch.
+    /// </summary>
+    public enum GameMode
+    {
+        ClassicRoguelike, // Partida estándar con cartas y selección de Grandes Maestros
+        Education,        // Secuencia interactiva de aprendizaje de ajedrez desde cero
+        Arcade            // Modo rápido / desafíos (Próximamente)
+    }
+
+    /// <summary>
+    /// Configuración de partida rápida seleccionada por el jugador antes de entrar al tablero.
+    /// </summary>
+    [Serializable]
+    public class MatchConfig
+    {
+        public CardData startingCard;
+        public PieceColor playerColor = PieceColor.White;
+        public float timeLimitSeconds = 0f; // 0 = Sin límite, 180 = 3 min, 300 = 5 min, 600 = 10 min
+        public AIDifficulty aiDifficulty = AIDifficulty.Medium;
+
+        public bool HasTimeLimit => timeLimitSeconds > 0.1f;
+    }
+
+    /// <summary>
     /// Singleton central que coordina el estado global del juego (Game Loop),
     /// la persistencia de dificultad con PlayerPrefs, transiciones de pantallas y limpieza
     /// de memoria en reinicios sin fugas de GameObjects o eventos duplicados.
@@ -23,6 +48,15 @@ namespace ChessBalatro
     public class GameManager : MonoBehaviour
     {
         public static GameManager Instance { get; private set; }
+
+        public static GameMode SelectedGameMode = GameMode.ClassicRoguelike;
+        public GameMode CurrentGameMode => SelectedGameMode;
+
+        // Configuración y reloj de partida rápida
+        public static MatchConfig CurrentMatchConfig = new MatchConfig();
+        public static float WhiteRemainingTime { get; set; } = 0f;
+        public static float BlackRemainingTime { get; set; } = 0f;
+        public static bool IsTimerRunning => CurrentMatchConfig != null && CurrentMatchConfig.HasTimeLimit && Instance != null && Instance.CurrentState == GameState.Playing;
 
         private const string DifficultyPrefKey = "ChessMatch_AIDifficulty";
 
@@ -77,8 +111,8 @@ namespace ChessBalatro
             ResolveReferences();
             ApplyDifficultyToSubsystems(selectedDifficulty);
 
-            // Iniciar en MainMenu por defecto
-            SetState(GameState.MainMenu);
+            // Ir directamente a jugar al tablero sin menús intermedios
+            StartNewGame();
         }
 
         private void OnDestroy()
@@ -241,13 +275,149 @@ namespace ChessBalatro
         }
 
         /// <summary>
+        /// Inicia el Modo Educativo cargando la secuencia de lecciones interactivas.
+        /// </summary>
+        public void StartEducationMode(int lessonIndex = 0)
+        {
+            Debug.Log($"<color=cyan><b>[GameManager] Iniciando Modo Educativo (Lección {lessonIndex + 1})...</b></color>");
+            ResolveReferences();
+            SelectedGameMode = GameMode.Education;
+            SetState(GameState.Playing);
+
+            if (cardManager != null)
+            {
+                cardManager.ClearTurnEffects();
+            }
+
+            TutorialController controller = FindAnyObjectByType<TutorialController>();
+            if (controller == null)
+            {
+                GameObject target = boardView != null ? boardView.gameObject : gameObject;
+                controller = target.AddComponent<TutorialController>();
+            }
+
+            if (FindAnyObjectByType<TutorialUI>() == null)
+            {
+                GameObject target = boardView != null ? boardView.gameObject : gameObject;
+                target.AddComponent<TutorialUI>();
+            }
+
+            if (controller != null)
+            {
+                controller.StartEducationMode(lessonIndex + 1);
+                return;
+            }
+
+            TutorialLessonManager tutorial = FindAnyObjectByType<TutorialLessonManager>();
+            if (tutorial == null)
+            {
+                GameObject target = boardView != null ? boardView.gameObject : gameObject;
+                tutorial = target.AddComponent<TutorialLessonManager>();
+            }
+
+            if (tutorial != null)
+            {
+                tutorial.StartEducationMode(lessonIndex);
+            }
+        }
+
+        /// <summary>
+        /// Provee la lista de cartas iniciales disponibles para el menú rápido de configuración de partida.
+        /// </summary>
+        public static List<CardData> GetAvailableStartingCards()
+        {
+            var list = new List<CardData>();
+
+            // 1. Tigrán Petrosián (Defensa Impenetrable)
+            var petrosian = PetrosianCardData.CreateRuntimeInstance();
+            list.Add(petrosian);
+
+            // 2. Peón Acelerado
+            var turboPawn = TurboPawnCardData.CreateInstance();
+            turboPawn.CardSprite = Resources.Load<Sprite>("Pieces/white_pawn");
+            list.Add(turboPawn);
+
+            // 3. Salto de Caballería
+            var knightCard = ScriptableObject.CreateInstance<CardData>();
+            knightCard.Initialize(
+                "Salto de Caballería",
+                "Los Caballos pueden desplazarse 1 casilla ortogonalmente además de su salto tradicional en L.",
+                4,
+                CardRarity.Rare,
+                new KnightBoostEffect()
+            );
+            knightCard.CardSprite = Resources.Load<Sprite>("Pieces/white_knight");
+            list.Add(knightCard);
+
+            return list;
+        }
+
+        private void Update()
+        {
+            if (IsTimerRunning && boardView != null && boardView.BoardState != null)
+            {
+                if (boardView.BoardState.CurrentTurn == PieceColor.White)
+                {
+                    WhiteRemainingTime -= Time.deltaTime;
+                    if (WhiteRemainingTime <= 0f)
+                    {
+                        WhiteRemainingTime = 0f;
+                        HandleTimeout(PieceColor.White);
+                    }
+                }
+                else
+                {
+                    BlackRemainingTime -= Time.deltaTime;
+                    if (BlackRemainingTime <= 0f)
+                    {
+                        BlackRemainingTime = 0f;
+                        HandleTimeout(PieceColor.Black);
+                    }
+                }
+            }
+        }
+
+        private void HandleTimeout(PieceColor outOfTimeColor)
+        {
+            Debug.Log($"<color=red><b>¡TIEMPO AGOTADO!</b> El bando {outOfTimeColor} se ha quedado sin tiempo.</color>");
+            bool isPlayerVictory = CurrentMatchConfig != null && outOfTimeColor != CurrentMatchConfig.playerColor;
+            SetState(GameState.GameOver);
+            OnGameOver?.Invoke(isPlayerVictory, boardView != null && boardView.BoardState != null ? boardView.BoardState.FullmoveNumber : 0);
+        }
+
+        /// <summary>
         /// Inicia una nueva partida desde el Menú Principal:
         /// Genera el tablero 8x8 limpio, distribuye piezas, mano de cartas y pasa a estado Playing.
+        /// Aplica la configuración rápida (carta activa, color de bando, reloj y dificultad de IA).
         /// </summary>
         public void StartNewGame()
         {
+            if (SelectedGameMode == GameMode.Education)
+            {
+                StartEducationMode(0);
+                return;
+            }
+
             Debug.Log("<color=green><b>[GameManager] Iniciando nueva partida (StartNewGame)...</b></color>");
             ResolveReferences();
+
+            // Sincronizar configuraciones rápidas
+            if (CurrentMatchConfig != null)
+            {
+                selectedDifficulty = CurrentMatchConfig.aiDifficulty;
+                ActiveMasterCard = CurrentMatchConfig.startingCard;
+
+                if (CurrentMatchConfig.HasTimeLimit)
+                {
+                    WhiteRemainingTime = CurrentMatchConfig.timeLimitSeconds;
+                    BlackRemainingTime = CurrentMatchConfig.timeLimitSeconds;
+                }
+                else
+                {
+                    WhiteRemainingTime = 0f;
+                    BlackRemainingTime = 0f;
+                }
+            }
             ApplyDifficultyToSubsystems(selectedDifficulty);
 
             // Transicionar de inmediato a Playing para que la UI responda
@@ -264,6 +434,20 @@ namespace ChessBalatro
                 if (boardView != null)
                 {
                     boardView.InitializeGame();
+                }
+
+                // Configurar bando del jugador e IA
+                if (inputHandler != null && CurrentMatchConfig != null)
+                {
+                    inputHandler.EnableAI = true;
+                    inputHandler.AIColor = CurrentMatchConfig.playerColor == PieceColor.White ? PieceColor.Black : PieceColor.White;
+                    inputHandler.AIDifficulty = CurrentMatchConfig.aiDifficulty;
+
+                    // Si el jugador eligió Negras, la IA juega con Blancas y abre la partida
+                    if (CurrentMatchConfig.playerColor == PieceColor.Black)
+                    {
+                        inputHandler.TriggerAITurn();
+                    }
                 }
 
                 if (cardManager != null)
@@ -317,6 +501,14 @@ namespace ChessBalatro
             if (inputHandler != null)
             {
                 inputHandler.Deselect();
+            }
+
+            // Si existe la escena MainMenuScene, volver asíncronamente a ella
+            if (Application.CanStreamedLevelBeLoaded("MainMenuScene") &&
+                UnityEngine.SceneManagement.SceneManager.GetActiveScene().name != "MainMenuScene")
+            {
+                UnityEngine.SceneManagement.SceneManager.LoadSceneAsync("MainMenuScene");
+                return;
             }
 
             // Opcional: restaurar el tablero inicial para que luzca de fondo en el menú

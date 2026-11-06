@@ -289,37 +289,18 @@ namespace ChessBalatro
 
         public void OnPlayClicked()
         {
-            Debug.Log("<color=cyan><b>[MainMenuController] Botón JUGAR pulsado. Abriendo selección de Gran Maestro...</b></color>");
-
-            // Asegurar que MasterSelectionUI exista en la escena
-            if (FindAnyObjectByType<MasterSelectionUI>() == null)
-            {
-                BoardView bv = FindAnyObjectByType<BoardView>();
-                GameObject host = bv != null ? bv.gameObject : gameObject;
-                host.AddComponent<MasterSelectionUI>();
-            }
+            Debug.Log("<color=cyan><b>[MainMenuController] Botón JUGAR pulsado. Iniciando partida directamente en el tablero...</b></color>");
 
             if (GameManager.Instance != null)
             {
-                // El flujo: MainMenu → MasterSelecting → Playing
-                GameManager.Instance.BeginMasterSelection();
+                GameManager.Instance.StartNewGame();
             }
             else
             {
-                GameManager gm = FindAnyObjectByType<GameManager>();
-                if (gm == null)
+                BoardView board = FindAnyObjectByType<BoardView>();
+                if (board != null)
                 {
-                    BoardView board = FindAnyObjectByType<BoardView>();
-                    if (board != null) gm = board.gameObject.AddComponent<GameManager>();
-                }
-
-                if (gm != null)
-                {
-                    gm.BeginMasterSelection();
-                }
-                else
-                {
-                    Debug.LogError("[MainMenuController] No se encontró GameManager ni BoardView en la escena.");
+                    board.InitializeGame();
                 }
             }
         }
@@ -433,42 +414,50 @@ namespace ChessBalatro
                 normal = { background = _modalBgTex }
             };
 
+            Font boldSerif = ChessFontProvider.SerifBold;
+            Font regularSerif = ChessFontProvider.SerifRegular;
+
             _titleStyle = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 22,
+                font = boldSerif,
+                fontSize = 24,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleCenter,
-                normal = { textColor = new Color(0.95f, 0.96f, 0.98f) }
+                normal = { textColor = new Color(0.96f, 0.86f, 0.38f) }
             };
 
             _subtitleStyle = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 12,
+                font = regularSerif,
+                fontSize = 14,
                 fontStyle = FontStyle.Normal,
                 alignment = TextAnchor.MiddleCenter,
-                normal = { textColor = new Color(0.72f, 0.78f, 0.88f) }
+                normal = { textColor = new Color(0.78f, 0.84f, 0.92f) }
             };
 
             _primaryButtonStyle = new GUIStyle(GUI.skin.button)
             {
+                font = boldSerif,
                 normal = { background = _primaryBtnTex, textColor = Color.white },
-                fontSize = 14,
+                fontSize = 16,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleCenter
             };
 
             _secondaryButtonStyle = new GUIStyle(GUI.skin.button)
             {
+                font = boldSerif,
                 normal = { background = _secondaryBtnTex, textColor = new Color(0.88f, 0.92f, 0.96f) },
-                fontSize = 13,
+                fontSize = 15,
                 fontStyle = FontStyle.Normal,
                 alignment = TextAnchor.MiddleCenter
             };
 
             _dangerButtonStyle = new GUIStyle(GUI.skin.button)
             {
+                font = boldSerif,
                 normal = { background = _dangerBtnTex, textColor = Color.white },
-                fontSize = 13,
+                fontSize = 15,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleCenter
             };

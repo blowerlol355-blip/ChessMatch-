@@ -393,6 +393,9 @@ namespace ChessBalatro
         /// </summary>
         public bool IsInCheck(PieceColor kingColor)
         {
+            if (kingColor == PieceColor.White && PetrosianDefenseEffect.IsShieldActive)
+                return false;
+
             BoardCoord? kingCoord = FindKing(kingColor);
             if (!kingCoord.HasValue) return false;
 

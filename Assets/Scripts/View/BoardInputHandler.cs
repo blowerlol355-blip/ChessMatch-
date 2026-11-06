@@ -71,6 +71,15 @@ namespace ChessBalatro
         public bool IsInteractionLocked { get; private set; } = false;
         public BoardCoord? SelectedCoord => _selectedCoord;
 
+        /// <summary>
+        /// Filtro o validador opcional inyectado externamente (ej. Modo Educativo / Tutorial).
+        /// Si retorna false, el movimiento se bloquea y no se muestra como legal.
+        /// </summary>
+        public Func<Move, bool> MoveFilter { get; set; }
+
+        public void SetMoveFilter(Func<Move, bool> filter) => MoveFilter = filter;
+        public void ClearMoveFilter() => MoveFilter = null;
+
         private BoardCoord? _selectedCoord = null;
         private readonly List<Move> _legalMoves = new List<Move>();
 
@@ -248,6 +257,11 @@ namespace ChessBalatro
                 Move targetMove = _legalMoves.Find(m => m.To == clickedCoord);
                 if (targetMove != null)
                 {
+                    if (MoveFilter != null && !MoveFilter(targetMove))
+                    {
+                        Debug.Log("<color=yellow>[BoardInputHandler] Movimiento bloqueado por restricción de lección.</color>");
+                        return;
+                    }
                     StartCoroutine(ExecuteMoveRoutine(targetMove));
                     return;
                 }
@@ -290,7 +304,21 @@ namespace ChessBalatro
 
             // Obtener todos los movimientos legales según reglas de ajedrez y jaque
             _legalMoves.Clear();
-            _legalMoves.AddRange(MoveValidator.GetLegalMoves(boardView.BoardState, coord));
+            var rawMoves = MoveValidator.GetLegalMoves(boardView.BoardState, coord);
+            if (MoveFilter != null)
+            {
+                for (int i = 0; i < rawMoves.Count; i++)
+                {
+                    if (MoveFilter(rawMoves[i]))
+                    {
+                        _legalMoves.Add(rawMoves[i]);
+                    }
+                }
+            }
+            else
+            {
+                _legalMoves.AddRange(rawMoves);
+            }
 
             // Instanciar / desplegar indicadores semitransparentes en cada casilla destino
             SpawnMoveIndicators(_legalMoves);

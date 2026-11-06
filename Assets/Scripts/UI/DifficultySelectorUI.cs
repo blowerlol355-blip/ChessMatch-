@@ -238,7 +238,8 @@ namespace ChessBalatro
 
             _headerStyle = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 12,
+                font = ChessFontProvider.SerifBold,
+                fontSize = 14,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleLeft,
                 normal = { textColor = new Color(0.88f, 0.92f, 0.98f) }
@@ -246,7 +247,8 @@ namespace ChessBalatro
 
             _subtextStyle = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 10,
+                font = ChessFontProvider.SerifRegular,
+                fontSize = 12,
                 fontStyle = FontStyle.Normal,
                 alignment = TextAnchor.MiddleLeft,
                 normal = { textColor = new Color(0.70f, 0.75f, 0.85f) }
@@ -254,16 +256,18 @@ namespace ChessBalatro
 
             _buttonActiveStyle = new GUIStyle(GUI.skin.button)
             {
+                font = ChessFontProvider.SerifBold,
                 normal = { background = _btnActiveBgTex, textColor = Color.white },
-                fontSize = 11,
+                fontSize = 13,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleCenter
             };
 
             _buttonInactiveStyle = new GUIStyle(GUI.skin.button)
             {
+                font = ChessFontProvider.SerifRegular,
                 normal = { background = _btnInactiveBgTex, textColor = new Color(0.65f, 0.70f, 0.80f) },
-                fontSize = 11,
+                fontSize = 12,
                 fontStyle = FontStyle.Normal,
                 alignment = TextAnchor.MiddleCenter
             };

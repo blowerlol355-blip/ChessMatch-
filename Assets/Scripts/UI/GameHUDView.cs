@@ -20,6 +20,7 @@ namespace ChessBalatro
         [Header("Configuración de HUD en Pantalla (OnGUI)")]
         [SerializeField] private bool showOnScreenHUD = true;
         [SerializeField] private bool showAnimatedBanner = true;
+        [SerializeField] private bool moveHistoryCollapsed = false;
 
         [Header("Opcional: Enlaces a Canvas / uGUI")]
         [SerializeField] private CanvasGroup alertCanvasGroup;
@@ -460,7 +461,8 @@ namespace ChessBalatro
 
             _headerStyle = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 13,
+                font = ChessFontProvider.SerifBold,
+                fontSize = 15,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleLeft,
                 normal = { textColor = new Color(0.92f, 0.94f, 0.98f) }
@@ -468,15 +470,17 @@ namespace ChessBalatro
 
             _labelStyle = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 11,
+                font = ChessFontProvider.SerifRegular,
+                fontSize = 13,
                 fontStyle = FontStyle.Normal,
                 normal = { textColor = new Color(0.80f, 0.84f, 0.90f) }
             };
 
             _badgeStyle = new GUIStyle(GUI.skin.box)
             {
+                font = ChessFontProvider.SerifBold,
                 normal = { background = _badgeBgTex, textColor = Color.white },
-                fontSize = 11,
+                fontSize = 12,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleCenter,
                 padding = new RectOffset(8, 8, 3, 3)
@@ -484,7 +488,8 @@ namespace ChessBalatro
 
             _moveListStyle = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 12,
+                font = ChessFontProvider.SerifRegular,
+                fontSize = 13,
                 fontStyle = FontStyle.Normal,
                 richText = true,
                 normal = { textColor = new Color(0.90f, 0.92f, 0.95f) }
@@ -492,7 +497,8 @@ namespace ChessBalatro
 
             _bannerTitleStyle = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 26,
+                font = ChessFontProvider.SerifBold,
+                fontSize = 32,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleCenter,
                 richText = true
@@ -500,7 +506,8 @@ namespace ChessBalatro
 
             _bannerSubtitleStyle = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 13,
+                font = ChessFontProvider.SerifRegular,
+                fontSize = 15,
                 fontStyle = FontStyle.Normal,
                 alignment = TextAnchor.MiddleCenter,
                 normal = { textColor = new Color(0.85f, 0.88f, 0.94f) }
@@ -513,67 +520,223 @@ namespace ChessBalatro
 
             InitStylesIfNeeded();
 
-            // 1. Dibujar Panel de Historial de Jugadas en Notación Algebraica (Lateral Izquierdo)
+            // 1. Dibujar Reloj de Ajedrez si hay límite de tiempo configurado
+            DrawChessClock();
+
+            // 2. Dibujar Panel de Historial de Jugadas en Notación Algebraica (Lateral Izquierdo)
             DrawMoveHistoryPanel();
 
-            // 2. Dibujar Banner Animado ("¡JAQUE!" o "¡JAQUE MATE!") Flotante en Pantalla
+            // 3. Dibujar Banner Animado ("¡JAQUE!" o "¡JAQUE MATE!") Flotante en Pantalla
             if (_isBannerActive && _bannerAlpha > 0.01f)
             {
                 DrawAnimatedAlertBanner();
             }
+
+            // 4. Dibujar Indicador de Carta Activa / En Uso con botón para Deshacer
+            DrawActiveCardIndicator();
+        }
+
+        private void DrawActiveCardIndicator()
+        {
+            CardManager cm = CardManager.Instance;
+            if (cm == null) cm = FindAnyObjectByType<CardManager>();
+            if (cm == null || cm.ActiveCardViews == null || cm.ActiveCardViews.Count == 0) return;
+
+            CardView activeCard = cm.ActiveCardViews[0];
+            if (activeCard == null || activeCard.CardData == null) return;
+
+            float screenW = Screen.width;
+            float pillW = Mathf.Min(screenW * 0.85f, 440f);
+            float pillH = 48f;
+            float pillX = (screenW - pillW) * 0.5f;
+            float pillY = Screen.height - 65f; // Ubicado en la parte inferior para fácil acceso táctil con una sola mano
+
+            Rect pillRect = new Rect(pillX, pillY, pillW, pillH);
+
+            // Sombra dura 32-bits
+            Color oldCol = GUI.color;
+            GUI.color = new Color(0.04f, 0.05f, 0.08f, 0.90f);
+            GUI.DrawTexture(new Rect(pillRect.x + 3, pillRect.y + 3, pillRect.width, pillRect.height), Texture2D.whiteTexture);
+
+            // Fondo del pill
+            GUI.color = new Color(0.10f, 0.12f, 0.18f, 0.96f);
+            GUI.DrawTexture(pillRect, Texture2D.whiteTexture);
+
+            // Borde dorado neón con pulso sutil
+            float pulse = 0.8f + 0.2f * Mathf.Sin(Time.time * 5f);
+            GUI.color = new Color(0.96f * pulse, 0.86f * pulse, 0.38f, 1f);
+            GUI.DrawTexture(new Rect(pillRect.x, pillRect.y, pillRect.width, 2), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(pillRect.x, pillRect.yMax - 2, pillRect.width, 2), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(pillRect.x, pillRect.y, 2, pillRect.height), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(pillRect.xMax - 2, pillRect.y, 2, pillRect.height), Texture2D.whiteTexture);
+
+            // Texto de efecto activo
+            GUI.color = Color.white;
+            float labelW = pillW - 110f;
+            GUIStyle pillLabelStyle = new GUIStyle(_headerStyle)
+            {
+                font = ChessFontProvider.SerifBold,
+                fontSize = 14,
+                alignment = TextAnchor.MiddleLeft
+            };
+            string cardName = activeCard.CardData.CardName.ToUpperInvariant();
+            GUI.Label(new Rect(pillRect.x + 14, pillRect.y, labelW, pillH), $"⚡ <color=#FFE566><b>ACTIVA:</b></color> {cardName}", pillLabelStyle);
+
+            // Botón Deshacer / Cancelar
+            float btnW = 92f;
+            float btnH = 34f;
+            Rect cancelBtnRect = new Rect(pillRect.xMax - btnW - 8f, pillRect.y + (pillH - btnH) * 0.5f, btnW, btnH);
+
+            GUIStyle cancelBtnStyle = new GUIStyle(GUI.skin.button)
+            {
+                font = ChessFontProvider.SerifBold,
+                fontSize = 12,
+                fontStyle = FontStyle.Bold,
+                alignment = TextAnchor.MiddleCenter,
+                normal = { textColor = new Color(1f, 0.85f, 0.85f, 1f) }
+            };
+
+            GUI.color = new Color(0.70f, 0.18f, 0.18f, 0.95f);
+            GUI.DrawTexture(cancelBtnRect, Texture2D.whiteTexture);
+            GUI.color = Color.white;
+
+            if (GUI.Button(cancelBtnRect, "✕ CANCELAR", cancelBtnStyle))
+            {
+                cm.DeactivateCard(activeCard);
+            }
+
+            GUI.color = oldCol;
+        }
+
+        private void DrawChessClock()
+        {
+            if (GameManager.CurrentMatchConfig == null || !GameManager.CurrentMatchConfig.HasTimeLimit) return;
+
+            float screenW = Screen.width;
+            float clockW = 340f;
+            float clockH = 46f;
+            float clockX = (screenW - clockW) * 0.5f;
+            float clockY = 14f;
+
+            int wMin = Mathf.FloorToInt(GameManager.WhiteRemainingTime / 60f);
+            int wSec = Mathf.FloorToInt(GameManager.WhiteRemainingTime % 60f);
+            int bMin = Mathf.FloorToInt(GameManager.BlackRemainingTime / 60f);
+            int bSec = Mathf.FloorToInt(GameManager.BlackRemainingTime % 60f);
+
+            bool isWhiteTurn = boardView != null && boardView.BoardState != null && boardView.BoardState.CurrentTurn == PieceColor.White;
+
+            string wCol = isWhiteTurn ? "#FFD700" : "#F1F5F9";
+            string bCol = !isWhiteTurn ? "#FFD700" : "#94A3B8";
+
+            string clockStr = $"⚪ <color={wCol}><b>{wMin:D2}:{wSec:D2}</b></color>   |   ⚫ <color={bCol}><b>{bMin:D2}:{bSec:D2}</b></color>";
+
+            GUI.Box(new Rect(clockX, clockY, clockW, clockH), GUIContent.none, _cardBoxStyle);
+
+            GUIStyle clockLabelStyle = new GUIStyle(_headerStyle)
+            {
+                font = ChessFontProvider.SerifBold,
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 17,
+                richText = true
+            };
+            GUI.Label(new Rect(clockX, clockY, clockW, clockH), clockStr, clockLabelStyle);
         }
 
         private void DrawMoveHistoryPanel()
         {
-            float panelWidth = 260f;
-            float panelHeight = 310f;
-            float posX = 16f;
-            float posY = 16f;
+            float screenW = Screen.width;
+            float screenH = Screen.height;
+            float scale = Mathf.Min(screenW / 1080f, screenH / 1920f);
+            if (scale < 0.65f) scale = 0.85f;
+
+            float panelWidth = Mathf.Min(250f * scale, screenW * 0.38f);
+            float expandedHeight = Mathf.Min(220f * scale, screenH * 0.28f);
+            float collapsedHeight = 36f * scale;
+
+            float panelHeight = moveHistoryCollapsed ? collapsedHeight : expandedHeight;
+            float posX = 16f * scale;
+            float posY = screenH - panelHeight - (16f * scale); // Anclado firmemente en la esquina inferior izquierda
 
             Rect panelRect = new Rect(posX, posY, panelWidth, panelHeight);
-            GUI.Box(panelRect, GUIContent.none, _cardBoxStyle);
 
-            GUILayout.BeginArea(panelRect);
-            GUILayout.Space(8);
+            // Sombra dura arcade 32-bits
+            Color oldCol = GUI.color;
+            GUI.color = new Color(0.04f, 0.05f, 0.08f, 0.88f);
+            GUI.DrawTexture(new Rect(panelRect.x + 2, panelRect.y + 2, panelRect.width, panelRect.height), Texture2D.whiteTexture);
 
-            // Encabezado
-            GUILayout.BeginHorizontal();
-            GUILayout.Space(8);
-            GUILayout.Label("PARTIDA DE AJEDREZ", _headerStyle);
-            GUILayout.EndHorizontal();
+            // Fondo del panel
+            GUI.color = new Color(0.10f, 0.12f, 0.17f, 0.96f);
+            GUI.DrawTexture(panelRect, Texture2D.whiteTexture);
 
-            GUILayout.Space(4);
+            // Borde duro arcade de 2px
+            GUI.color = new Color(0.24f, 0.32f, 0.44f, 1f);
+            GUI.DrawTexture(new Rect(panelRect.x, panelRect.y, panelRect.width, 2), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(panelRect.x, panelRect.yMax - 2, panelRect.width, 2), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(panelRect.x, panelRect.y, 2, panelRect.height), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(panelRect.xMax - 2, panelRect.y, 2, panelRect.height), Texture2D.whiteTexture);
+            GUI.color = oldCol;
+
+            // Encabezado con título y botón de colapsar/expandir
+            float headerH = 32f * scale;
+            float toggleBtnW = 28f * scale;
+            float toggleBtnH = 24f * scale;
+            Rect toggleRect = new Rect(panelRect.xMax - toggleBtnW - (5f * scale), panelRect.y + (4f * scale), toggleBtnW, toggleBtnH);
+
+            GUIStyle toggleStyle = new GUIStyle(GUI.skin.button)
+            {
+                font = ChessFontProvider.SerifBold,
+                fontSize = Mathf.RoundToInt(11 * scale),
+                alignment = TextAnchor.MiddleCenter,
+                normal = { textColor = new Color(0.85f, 0.90f, 0.96f, 1f) }
+            };
+
+            string toggleIcon = moveHistoryCollapsed ? "▲" : "▼";
+            if (GUI.Button(toggleRect, toggleIcon, toggleStyle))
+            {
+                moveHistoryCollapsed = !moveHistoryCollapsed;
+            }
+
+            GUIStyle headerStyle = new GUIStyle(_headerStyle)
+            {
+                fontSize = Mathf.RoundToInt(12 * scale),
+                alignment = TextAnchor.MiddleLeft
+            };
+            GUI.Label(new Rect(panelRect.x + (10f * scale), panelRect.y + (4f * scale), panelWidth - toggleBtnW - (20f * scale), headerH), "PARTIDA DE AJEDREZ", headerStyle);
+
+            if (moveHistoryCollapsed)
+            {
+                return;
+            }
 
             // Banderín de Turno
             string turnName = (boardView != null && boardView.BoardState?.CurrentTurn == PieceColor.White) ? "Blancas" : "Negras";
             Color turnColor = (boardView != null && boardView.BoardState?.CurrentTurn == PieceColor.White) ? Color.white : new Color(0.55f, 0.60f, 0.70f);
 
-            GUILayout.BeginHorizontal();
-            GUILayout.Space(8);
             GUI.color = turnColor;
-            GUILayout.Label($"● Turno actual: <b>{turnName}</b>", _labelStyle);
+            GUIStyle turnStyle = new GUIStyle(_labelStyle) { fontSize = Mathf.RoundToInt(11 * scale) };
+            GUI.Label(new Rect(panelRect.x + (10f * scale), panelRect.y + headerH, panelWidth - (20f * scale), 18f * scale), $"● Turno: <b>{turnName}</b>", turnStyle);
             GUI.color = Color.white;
-            GUILayout.EndHorizontal();
-
-            GUILayout.Space(6);
 
             // Título de la tabla de notación
-            GUILayout.BeginHorizontal();
-            GUILayout.Space(8);
-            GUILayout.Label("<b>#     BLANCAS       NEGRAS</b>", _labelStyle);
-            GUILayout.EndHorizontal();
+            float colHeaderY = panelRect.y + headerH + (18f * scale);
+            GUI.Label(new Rect(panelRect.x + (10f * scale), colHeaderY, panelWidth - (20f * scale), 16f * scale), "<b>#     BLANCAS       NEGRAS</b>", turnStyle);
 
             // Contenedor scrollable de jugadas en notación algebraica
-            Rect scrollArea = new Rect(8, 76, panelWidth - 16, panelHeight - 90);
-            float contentHeight = Mathf.Max(_turnEntries.Count * 22f + 10f, scrollArea.height);
-            Rect contentRect = new Rect(0, 0, panelWidth - 36, contentHeight);
+            float scrollY = colHeaderY + (18f * scale);
+            float scrollH = panelRect.yMax - scrollY - (6f * scale);
+            Rect scrollArea = new Rect(panelRect.x + (6f * scale), scrollY, panelWidth - (12f * scale), scrollH);
+            float rowH = 18f * scale;
+            float contentHeight = Mathf.Max(_turnEntries.Count * rowH + 6f, scrollArea.height);
+            Rect contentRect = new Rect(0, 0, panelWidth - (32f * scale), contentHeight);
 
             _historyScrollPos = GUI.BeginScrollView(scrollArea, _historyScrollPos, contentRect, false, true);
+
+            GUIStyle moveStyle = new GUIStyle(_moveListStyle) { fontSize = Mathf.RoundToInt(11 * scale) };
 
             if (_turnEntries.Count == 0)
             {
                 GUI.color = new Color(0.6f, 0.65f, 0.75f);
-                GUI.Label(new Rect(10, 10, panelWidth - 50, 24), "(Sin jugadas aún)", _moveListStyle);
+                GUI.Label(new Rect(6, 4, panelWidth - 40, 20), "(Sin jugadas aún)", moveStyle);
                 GUI.color = Color.white;
             }
             else
@@ -582,9 +745,8 @@ namespace ChessBalatro
                 {
                     TurnEntry entry = _turnEntries[i];
                     bool isLatestTurn = (i == _turnEntries.Count - 1);
-                    float rowY = i * 22f + 4f;
+                    float rowY = i * rowH + 2f;
 
-                    // Si es el último movimiento, destacar sutilmente
                     string turnPrefix = $"<color=#88AACC>{entry.TurnNumber}.</color>";
                     string whiteStr = string.IsNullOrEmpty(entry.WhiteMove) ? "—" : entry.WhiteMove;
                     string blackStr = string.IsNullOrEmpty(entry.BlackMove) ? "—" : entry.BlackMove;
@@ -598,13 +760,11 @@ namespace ChessBalatro
                     }
 
                     string rowText = $"{turnPrefix,-14}  {whiteStr,-14}  {blackStr}";
-                    GUI.Label(new Rect(8, rowY, panelWidth - 40, 22), rowText, _moveListStyle);
+                    GUI.Label(new Rect(6, rowY, panelWidth - 32, rowH), rowText, moveStyle);
                 }
             }
 
             GUI.EndScrollView();
-
-            GUILayout.EndArea();
         }
 
         private void DrawAnimatedAlertBanner()
