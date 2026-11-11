@@ -4,6 +4,20 @@ using UnityEngine;
 namespace ChessBalatro
 {
     /// <summary>
+    /// Datos detallados de una captura ocurrida en el tablero para economía de puntos y VFX/UI.
+    /// </summary>
+    public struct PieceCaptureEventData
+    {
+        public Piece CapturedPiece;
+        public Piece CapturingPiece;
+        public BoardCoord CaptureCoord;
+        public Vector3 WorldPosition;
+        public bool DeliveredCheck;
+        public bool IsCheckmate;
+        public Move Move;
+    }
+
+    /// <summary>
     /// Fachada y controlador de alto nivel que conecta el tablero de ajedrez (BoardView / BoardInputHandler)
     /// con el sistema de cartas tipo Balatro (CardManager).
     /// </summary>
@@ -13,6 +27,7 @@ namespace ChessBalatro
         [SerializeField] private BoardView boardView;
         [SerializeField] private BoardInputHandler inputHandler;
         [SerializeField] private CardManager cardManager;
+        [SerializeField] private CaptureRewardManager captureRewardManager;
 
         [Header("Configuración de Inteligencia Artificial")]
         [SerializeField] private bool enableAI = true;
@@ -21,6 +36,7 @@ namespace ChessBalatro
         public BoardView BoardView => boardView;
         public BoardInputHandler InputHandler => inputHandler;
         public CardManager CardManager => cardManager;
+        public CaptureRewardManager CaptureRewardManager => captureRewardManager;
         public BoardState BoardState => boardView != null ? boardView.BoardState : null;
 
         public bool EnableAI
@@ -45,6 +61,34 @@ namespace ChessBalatro
         }
 
         public event Action<AIDifficulty> OnDifficultyChanged;
+        public event Action<PieceCaptureEventData> OnPieceCaptured;
+        public event Action<Piece, BoardCoord, Vector3, bool> OnPlayerCheckDelivered;
+        public event Action<int> OnExtraTurnsChanged;
+        public event Action OnGameRestarted;
+
+        private int _pendingExtraTurns = 0;
+        public int PendingExtraTurns => BoardState != null ? BoardState.PendingExtraTurns : _pendingExtraTurns;
+
+        /// <summary>
+        /// Otorga turnos consecutivos adicionales al bando activo en la ronda actual.
+        /// </summary>
+        public void GrantExtraTurn(int count = 1)
+        {
+            if (count <= 0) return;
+
+            if (BoardState != null)
+            {
+                BoardState.GrantExtraTurn(BoardState.CurrentTurn, count);
+                _pendingExtraTurns = BoardState.PendingExtraTurns;
+            }
+            else
+            {
+                _pendingExtraTurns += count;
+            }
+
+            OnExtraTurnsChanged?.Invoke(PendingExtraTurns);
+            Debug.Log($"<color=#C066FF><b>[BoardManager]</b> Turnos consecutivos otorgados (+{count}). Pendientes: {PendingExtraTurns}.</color>");
+        }
 
         public void SetDifficulty(AIDifficulty newDifficulty)
         {
@@ -61,6 +105,8 @@ namespace ChessBalatro
 
         private void Awake()
         {
+            RetroAudioManager.EnsureInstance();
+
             if (boardView == null) boardView = GetComponent<BoardView>();
             if (boardView == null) boardView = FindAnyObjectByType<BoardView>();
 
@@ -69,6 +115,7 @@ namespace ChessBalatro
 
             if (inputHandler != null)
             {
+                inputHandler.BindBoardManager(this);
                 inputHandler.EnableAI = enableAI;
                 inputHandler.AIDifficulty = aiDifficulty;
             }
@@ -86,12 +133,15 @@ namespace ChessBalatro
                 if (inputHandler != null) cardManager.BindInputHandler(inputHandler);
                 if (boardView != null) cardManager.BindBoardView(boardView);
             }
+
+            EnsureEconomySubsystems();
         }
 
         private void Start()
         {
             if (boardView == null) boardView = FindAnyObjectByType<BoardView>();
             if (inputHandler == null && boardView != null) inputHandler = boardView.InputHandler;
+            if (inputHandler != null) inputHandler.BindBoardManager(this);
             if (cardManager == null) cardManager = FindAnyObjectByType<CardManager>();
 
             if (cardManager != null)
@@ -99,6 +149,42 @@ namespace ChessBalatro
                 if (inputHandler != null) cardManager.BindInputHandler(inputHandler);
                 if (boardView != null) cardManager.BindBoardView(boardView);
             }
+
+            EnsureEconomySubsystems();
+        }
+
+        private void EnsureEconomySubsystems()
+        {
+            if (captureRewardManager == null) captureRewardManager = GetComponent<CaptureRewardManager>();
+            if (captureRewardManager == null) captureRewardManager = FindAnyObjectByType<CaptureRewardManager>();
+
+            GameObject hostObj = boardView != null ? boardView.gameObject : gameObject;
+            if (captureRewardManager == null)
+            {
+                captureRewardManager = hostObj.AddComponent<CaptureRewardManager>();
+            }
+            captureRewardManager.BindBoardManager(this);
+
+            if (FindAnyObjectByType<RewardDraftModalUI>() == null)
+            {
+                hostObj.AddComponent<RewardDraftModalUI>();
+            }
+        }
+
+        /// <summary>
+        /// Notifica una captura ejecutada en el tablero a la economía de puntos y sistemas de recompensa.
+        /// </summary>
+        public void NotifyPieceCaptured(PieceCaptureEventData captureData)
+        {
+            OnPieceCaptured?.Invoke(captureData);
+        }
+
+        /// <summary>
+        /// Notifica un Jaque válido sin captura para evaluar bonificaciones opcionales.
+        /// </summary>
+        public void NotifyCheckDelivered(Piece checkingPiece, BoardCoord checkedKingCoord, Vector3 checkedKingWorldPos, bool isCheckmate)
+        {
+            OnPlayerCheckDelivered?.Invoke(checkingPiece, checkedKingCoord, checkedKingWorldPos, isCheckmate);
         }
 
         /// <summary>
@@ -107,6 +193,16 @@ namespace ChessBalatro
         [ContextMenu("Restart Game")]
         public void RestartGame()
         {
+            _pendingExtraTurns = 0;
+            PetrosianDefenseEffect.ForceReset();
+            if (BoardState != null)
+            {
+                BoardState.PendingExtraTurns = 0;
+                BoardState.ClearImmobilizedPieces();
+                BoardState.ClearIntimidation();
+            }
+            inputHandler?.CancelPendingMoves();
+            OnGameRestarted?.Invoke();
             if (cardManager != null) cardManager.ClearTurnEffects();
             if (boardView != null) boardView.InitializeGame();
         }

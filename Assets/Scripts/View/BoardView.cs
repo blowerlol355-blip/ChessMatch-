@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace ChessBalatro
 {
@@ -47,10 +48,12 @@ namespace ChessBalatro
         private readonly TileView[,] _tileViews = new TileView[BoardState.BoardSize, BoardState.BoardSize];
         private readonly PieceView[,] _pieceViews = new PieceView[BoardState.BoardSize, BoardState.BoardSize];
         private static Sprite _defaultWhiteSprite;
+        private static Sprite _softShadowSprite;
 
         public BoardState BoardState { get; private set; }
         public PieceTheme PieceTheme => pieceTheme;
         public float TileSize => tileSize;
+        public float FrameWorldSpan => (BoardState.BoardSize + 0.85f) * tileSize;
         public BoardInputHandler InputHandler => inputHandler;
 
         private BoardCoord? _selectedCoord = null;
@@ -122,10 +125,28 @@ namespace ChessBalatro
                 gameObject.AddComponent<TutorialUI>();
             }
 
+            if (GetComponent<BoardManager>() == null && FindAnyObjectByType<BoardManager>(FindObjectsInactive.Include) == null)
+            {
+                gameObject.AddComponent<BoardManager>();
+            }
+
+            if (GetComponent<CaptureRewardManager>() == null && FindAnyObjectByType<CaptureRewardManager>(FindObjectsInactive.Include) == null)
+            {
+                gameObject.AddComponent<CaptureRewardManager>();
+            }
+
+            if (GetComponent<RewardDraftModalUI>() == null && FindAnyObjectByType<RewardDraftModalUI>(FindObjectsInactive.Include) == null)
+            {
+                gameObject.AddComponent<RewardDraftModalUI>();
+            }
+
             if (FindAnyObjectByType<GameBackdrop>() == null)
             {
                 GameBackdrop.EnsureBackdrop();
             }
+
+            // Asegurar resolución de referencia estándar y equilibrio CanvasScaler para móvil
+            EnsureCanvasScalersConfigured();
 
             // Sincronizar tema con el Skin activo de PieceSkinManager
             if (PieceSkinManager.Instance != null && PieceSkinManager.Instance.ActiveTheme != null)
@@ -149,7 +170,9 @@ namespace ChessBalatro
 
         private void Start()
         {
-            if (autoGenerateOnStart)
+            EnsureCanvasScalersConfigured();
+
+            if (autoGenerateOnStart && !OnboardingManager.IsOnboardingGameplayActive && GameManager.SelectedGameMode != GameMode.Arcade)
             {
                 InitializeGame();
             }
@@ -206,7 +229,11 @@ namespace ChessBalatro
             pgnHistory = "";
             currentTurnDisplay = "Blancas";
 
+            // Limpiar anuncios o banners flotantes
+            FindAnyObjectByType<GameHUDView>()?.ClearBanner();
+
             SpawnAllPieces();
+            RefreshPieceStatusVisuals();
             UpdateCheckHighlight();
             OnGameInitialized?.Invoke(BoardState);
         }
@@ -301,20 +328,8 @@ namespace ChessBalatro
 
             Sprite tileSpriteToUse = squareSprite != null ? squareSprite : GetOrCreateProceduralSprite();
 
-            // Marco o respaldo oscuro para resaltar el tablero de ajedrez sobre la ilustración de fondo
-            Transform existingFrame = transform.Find("BoardFrameBacking");
-            if (existingFrame == null)
-            {
-                GameObject frameObj = new GameObject("BoardFrameBacking");
-                frameObj.transform.SetParent(transform);
-                frameObj.transform.localPosition = new Vector3(0, 0, 0.05f);
-                var sr = frameObj.AddComponent<SpriteRenderer>();
-                sr.sprite = tileSpriteToUse;
-                sr.color = new Color(0.04f, 0.06f, 0.09f, 0.90f);
-                sr.sortingOrder = -5;
-                float frameSize = BoardState.BoardSize * tileSize + 0.35f;
-                frameObj.transform.localScale = new Vector3(frameSize, frameSize, 1f);
-            }
+            // Marco estético de 32-bits y sombra suave alrededor del tablero 8x8
+            SetupBoardFrame(tileSpriteToUse);
 
             for (int file = 0; file < BoardState.BoardSize; file++)
             {
@@ -393,6 +408,8 @@ namespace ChessBalatro
 
         public void HandleTileOrPieceClicked(BoardCoord clickedCoord)
         {
+            if (CaptureRewardManager.Instance != null && CaptureRewardManager.Instance.IsDraftOpen) return;
+
             OnSquareClicked?.Invoke(clickedCoord);
 
             // Si el controlador táctil y de animaciones está activo, delegar la interacción
@@ -434,6 +451,10 @@ namespace ChessBalatro
 
             _currentLegalMoves = MoveValidator.GetLegalMoves(BoardState, coord);
             HighlightLegalMoves(_currentLegalMoves);
+
+            PieceView pv = GetPieceView(coord);
+            if (pv != null) pv.PlaySelectSound();
+            else RetroAudioManager.Instance?.PlayPieceSelect();
         }
 
         private void DeselectCurrent()
@@ -447,10 +468,31 @@ namespace ChessBalatro
         {
             BoardCoord from = move.From;
             BoardCoord to = move.To;
+            BoardCoord capturedCoord = move.IsEnPassant ? new BoardCoord(to.File, from.Rank) : to;
+            Piece capturedSnapshot = move.PieceCaptured ?? BoardState[capturedCoord];
+            Piece movingSnapshot = move.PieceMoved ?? BoardState[from];
+            bool wasCapture = move.IsEnPassant
+                ? (_pieceViews[to.File, from.Rank] != null || BoardState[to.File, from.Rank] != null)
+                : (_pieceViews[to.File, to.Rank] != null || capturedSnapshot != null);
 
             // Mover en la lógica
             bool success = BoardState.MakeMove(move);
             if (!success) return;
+
+            MoveRecord? lastRecord = BoardState.History?.LastMove;
+            Piece finalCaptured = (lastRecord.HasValue && lastRecord.Value.pieceCaptured != null)
+                ? lastRecord.Value.pieceCaptured
+                : capturedSnapshot;
+            Piece finalMoving = (lastRecord.HasValue && lastRecord.Value.pieceMoved != null)
+                ? lastRecord.Value.pieceMoved
+                : movingSnapshot;
+            bool provokedCheckmate = lastRecord.HasValue && lastRecord.Value.isCheckmate;
+            PieceColor enemySide = finalMoving != null
+                ? (finalMoving.Color == PieceColor.White ? PieceColor.Black : PieceColor.White)
+                : BoardState.CurrentTurn;
+            bool provokedCheck = (lastRecord.HasValue && lastRecord.Value.isCheck)
+                || BoardState.IsInCheck(enemySide);
+            bool didCapture = wasCapture || finalCaptured != null;
 
             // Actualizar vista de piezas
             PieceView movingPieceView = _pieceViews[from.File, from.Rank];
@@ -515,8 +557,55 @@ namespace ChessBalatro
                 {
                     movingPieceView.Initialize(BoardState[to], to, CoordToWorldPosition(to), pieceTheme);
                 }
+
+                movingPieceView.PlayMoveSound(didCapture);
+            }
+            else if (RetroAudioManager.Instance != null)
+            {
+                if (didCapture) RetroAudioManager.Instance.PlayPieceCapture();
+                else RetroAudioManager.Instance.PlayPieceMove();
             }
 
+            if (provokedCheck)
+            {
+                RetroAudioManager.Instance?.PlayCheckAlert();
+            }
+
+            BoardManager bm = FindAnyObjectByType<BoardManager>();
+            if (bm != null)
+            {
+                if (finalCaptured != null)
+                {
+                    bm.NotifyPieceCaptured(new PieceCaptureEventData
+                    {
+                        CapturedPiece = finalCaptured,
+                        CapturingPiece = finalMoving,
+                        CaptureCoord = capturedCoord,
+                        WorldPosition = CoordToWorldPosition(capturedCoord),
+                        DeliveredCheck = provokedCheck,
+                        IsCheckmate = provokedCheckmate,
+                        Move = move
+                    });
+                }
+                else if (provokedCheck)
+                {
+                    PieceColor enemyColor = finalMoving != null
+                        ? (finalMoving.Color == PieceColor.White ? PieceColor.Black : PieceColor.White)
+                        : BoardState.CurrentTurn;
+                    BoardCoord? checkedKingCoord = BoardState.FindKing(enemyColor);
+                    Vector3 checkPopupPos = checkedKingCoord.HasValue
+                        ? CoordToWorldPosition(checkedKingCoord.Value)
+                        : CoordToWorldPosition(to);
+                    bm.NotifyCheckDelivered(
+                        finalMoving,
+                        checkedKingCoord ?? to,
+                        checkPopupPos,
+                        provokedCheckmate
+                    );
+                }
+            }
+
+            RefreshPieceStatusVisuals();
             DeselectCurrent();
             OnMoveExecuted?.Invoke(move);
         }
@@ -580,6 +669,26 @@ namespace ChessBalatro
                     }
                 }
             }
+            RefreshPieceStatusVisuals();
+        }
+
+        /// <summary>
+        /// Actualiza tintes visuales de estado en las piezas (ej. piezas inmovilizadas por Bosque Oscuro).
+        /// </summary>
+        public void RefreshPieceStatusVisuals()
+        {
+            for (int f = 0; f < BoardState.BoardSize; f++)
+            {
+                for (int r = 0; r < BoardState.BoardSize; r++)
+                {
+                    PieceView pv = _pieceViews[f, r];
+                    if (pv != null && pv.PieceData != null)
+                    {
+                        bool frozen = BoardState != null && BoardState.IsPieceImmobilized(pv.PieceData);
+                        pv.SetImmobilizedVisual(frozen);
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -628,6 +737,9 @@ namespace ChessBalatro
             pgnHistory = "";
             currentTurnDisplay = customState.CurrentTurn == PieceColor.White ? "Blancas" : "Negras";
 
+            // Limpiar anuncios o banners flotantes al cargar lección
+            FindAnyObjectByType<GameHUDView>()?.ClearBanner();
+
             // Sincronizar aspecto activo antes de instanciar piezas
             if (PieceSkinManager.Instance != null && PieceSkinManager.Instance.ActiveTheme != null)
             {
@@ -635,6 +747,7 @@ namespace ChessBalatro
             }
 
             SpawnAllPieces();
+            RefreshPieceStatusVisuals();
             UpdateCheckHighlight();
             OnGameInitialized?.Invoke(BoardState);
         }
@@ -752,7 +865,7 @@ namespace ChessBalatro
 
         private void OnGUI()
         {
-            if (!showOnScreenHUD || FindAnyObjectByType<GameHUDView>() != null) return;
+            if (!showOnScreenHUD || FindAnyObjectByType<GameHUDView>() != null || TutorialController.IsEducationalModeActive || OnboardingManager.IsOnboardingGameplayActive || GameManager.SelectedGameMode == GameMode.Arcade || ArcadeSurvivorController.IsArcadeModeActive) return;
 
             int panelWidth = 270;
             int panelHeight = 240;
@@ -825,6 +938,122 @@ namespace ChessBalatro
             GUILayout.EndArea();
         }
 
+        /// <summary>
+        /// Configura el marco estético 32-bits del tablero con marco oscuro (#1A212D), borde dorado/acero (#D4AF37)
+        /// y sombra suave para separarlo de la ilustración de fondo.
+        /// </summary>
+        private void SetupBoardFrame(Sprite spriteToUse)
+        {
+            // Limpiar respaldo anterior si existe
+            Transform legacyFrame = transform.Find("BoardFrameBacking");
+            if (legacyFrame != null)
+            {
+                if (Application.isPlaying) Destroy(legacyFrame.gameObject);
+                else DestroyImmediate(legacyFrame.gameObject);
+            }
+
+            Transform frameContainer = transform.Find("BoardFrameContainer");
+            if (frameContainer == null)
+            {
+                GameObject containerObj = new GameObject("BoardFrameContainer");
+                containerObj.transform.SetParent(transform);
+                containerObj.transform.localPosition = Vector3.zero;
+                frameContainer = containerObj.transform;
+            }
+
+            float boardSize = BoardState.BoardSize * tileSize;
+            Sprite solidFrameSprite = GetOrCreateProceduralSprite();
+            Sprite softShadowSprite = GetOrCreateSoftShadowSprite();
+
+            // 1. Sombra suave difuminada para separar el tablero con elegancia de la ilustración de fondo
+            Transform shadowTrans = frameContainer.Find("BoardShadow");
+            if (shadowTrans == null)
+            {
+                GameObject shadowObj = new GameObject("BoardShadow");
+                shadowObj.transform.SetParent(frameContainer);
+                shadowTrans = shadowObj.transform;
+            }
+            shadowTrans.localPosition = new Vector3(0.08f * tileSize, -0.12f * tileSize, 0.15f);
+            var shadowSR = shadowTrans.GetComponent<SpriteRenderer>();
+            if (shadowSR == null) shadowSR = shadowTrans.gameObject.AddComponent<SpriteRenderer>();
+            shadowSR.sprite = softShadowSprite;
+            shadowSR.color = new Color(0.01f, 0.02f, 0.04f, 0.82f); // Sombra profunda con borde difuminado suave
+            shadowSR.sortingOrder = -10;
+            float shadowDim = boardSize + (1.28f * tileSize);
+            shadowTrans.localScale = new Vector3(shadowDim, shadowDim, 1f);
+
+            // 2. Borde exterior dorado / acero (#D4AF37)
+            Transform goldBorderTrans = frameContainer.Find("BoardGoldBorder");
+            if (goldBorderTrans == null)
+            {
+                GameObject goldObj = new GameObject("BoardGoldBorder");
+                goldObj.transform.SetParent(frameContainer);
+                goldBorderTrans = goldObj.transform;
+            }
+            goldBorderTrans.localPosition = new Vector3(0f, 0f, 0.10f);
+            var goldSR = goldBorderTrans.GetComponent<SpriteRenderer>();
+            if (goldSR == null) goldSR = goldBorderTrans.gameObject.AddComponent<SpriteRenderer>();
+            goldSR.sprite = solidFrameSprite;
+            goldSR.color = new Color(0.831f, 0.686f, 0.216f, 1f); // #D4AF37 Borde dorado
+            goldSR.sortingOrder = -8;
+            float goldDim = boardSize + (0.46f * tileSize);
+            goldBorderTrans.localScale = new Vector3(goldDim, goldDim, 1f);
+
+            // 3. Marco oscuro (#1A212D) alrededor del tablero 8x8
+            Transform darkFrameTrans = frameContainer.Find("BoardDarkFrame");
+            if (darkFrameTrans == null)
+            {
+                GameObject darkObj = new GameObject("BoardDarkFrame");
+                darkObj.transform.SetParent(frameContainer);
+                darkFrameTrans = darkObj.transform;
+            }
+            darkFrameTrans.localPosition = new Vector3(0f, 0f, 0.05f);
+            var darkSR = darkFrameTrans.GetComponent<SpriteRenderer>();
+            if (darkSR == null) darkSR = darkFrameTrans.gameObject.AddComponent<SpriteRenderer>();
+            darkSR.sprite = solidFrameSprite;
+            darkSR.color = new Color(0.102f, 0.129f, 0.176f, 1f); // #1A212D Marco oscuro
+            darkSR.sortingOrder = -6;
+            float darkDim = boardSize + (0.36f * tileSize);
+            darkFrameTrans.localScale = new Vector3(darkDim, darkDim, 1f);
+
+            // 4. Filete interior dorado sutil junto a las 64 casillas
+            Transform innerAccentTrans = frameContainer.Find("BoardInnerAccent");
+            if (innerAccentTrans == null)
+            {
+                GameObject innerObj = new GameObject("BoardInnerAccent");
+                innerObj.transform.SetParent(frameContainer);
+                innerAccentTrans = innerObj.transform;
+            }
+            innerAccentTrans.localPosition = new Vector3(0f, 0f, 0.02f);
+            var innerSR = innerAccentTrans.GetComponent<SpriteRenderer>();
+            if (innerSR == null) innerSR = innerAccentTrans.gameObject.AddComponent<SpriteRenderer>();
+            innerSR.sprite = solidFrameSprite;
+            innerSR.color = new Color(0.831f, 0.686f, 0.216f, 0.55f); // Filete interior dorado
+            innerSR.sortingOrder = -4;
+            float innerDim = boardSize + (0.06f * tileSize);
+            innerAccentTrans.localScale = new Vector3(innerDim, innerDim, 1f);
+        }
+
+        /// <summary>
+        /// Configura automáticamente todos los CanvasScaler en resolución 1080x1920 con Match = 0.5f.
+        /// </summary>
+        public static void EnsureCanvasScalersConfigured()
+        {
+            Canvas[] allCanvases = FindObjectsByType<Canvas>(FindObjectsInactive.Include);
+            foreach (Canvas canvas in allCanvases)
+            {
+                CanvasScaler scaler = canvas.GetComponent<CanvasScaler>();
+                if (scaler == null)
+                {
+                    scaler = canvas.gameObject.AddComponent<CanvasScaler>();
+                }
+                scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+                scaler.referenceResolution = new Vector2(1080f, 1920f);
+                scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+                scaler.matchWidthOrHeight = 0.5f;
+            }
+        }
+
         private Sprite GetOrCreateProceduralSprite()
         {
             if (_defaultWhiteSprite != null) return _defaultWhiteSprite;
@@ -842,6 +1071,47 @@ namespace ChessBalatro
             );
 
             return _defaultWhiteSprite;
+        }
+
+        private Sprite GetOrCreateSoftShadowSprite()
+        {
+            if (_softShadowSprite != null) return _softShadowSprite;
+
+            const int size = 64;
+            const float coreExtent = 0.84f;
+            Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
+            {
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp
+            };
+
+            Color[] pixels = new Color[size * size];
+            for (int y = 0; y < size; y++)
+            {
+                float v = ((y + 0.5f) / size) * 2f - 1f;
+                for (int x = 0; x < size; x++)
+                {
+                    float u = ((x + 0.5f) / size) * 2f - 1f;
+                    float dx = Mathf.Max(0f, Mathf.Abs(u) - coreExtent) / (1f - coreExtent);
+                    float dy = Mathf.Max(0f, Mathf.Abs(v) - coreExtent) / (1f - coreExtent);
+                    float dist = Mathf.Clamp01(Mathf.Sqrt(dx * dx + dy * dy));
+                    float falloff = 1f - dist;
+                    float alpha = falloff * falloff * (3f - 2f * falloff);
+                    pixels[y * size + x] = new Color(1f, 1f, 1f, alpha);
+                }
+            }
+
+            tex.SetPixels(pixels);
+            tex.Apply();
+
+            _softShadowSprite = Sprite.Create(
+                tex,
+                new Rect(0, 0, size, size),
+                new Vector2(0.5f, 0.5f),
+                (float)size
+            );
+
+            return _softShadowSprite;
         }
     }
 }

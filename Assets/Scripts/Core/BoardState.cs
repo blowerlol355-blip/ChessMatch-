@@ -155,6 +155,86 @@ namespace ChessBalatro
         /// </summary>
         public List<ICardEffect> ActiveCardEffects { get; } = new List<ICardEffect>();
 
+        // ── Mecánicas de Grandes Maestros (Turnos Extra, Inmovilización, Intimidación) ───────────
+        private readonly Dictionary<Piece, int> _immobilizedPieces = new Dictionary<Piece, int>();
+
+        public int PendingExtraTurns { get; set; } = 0;
+        public PieceColor ExtraTurnColor { get; set; } = PieceColor.White;
+
+        public PieceColor IntimidatedColor { get; set; } = PieceColor.Black;
+        public int IntimidatedTurnsRemaining { get; set; } = 0;
+
+        public void GrantExtraTurn(PieceColor color, int count = 1)
+        {
+            if (count <= 0) return;
+            ExtraTurnColor = color;
+            PendingExtraTurns += count;
+        }
+
+        public void ImmobilizePiece(Piece piece, int turns = 1)
+        {
+            if (piece == null || turns <= 0) return;
+            if (_immobilizedPieces.TryGetValue(piece, out int existing))
+            {
+                _immobilizedPieces[piece] = Math.Max(existing, turns);
+            }
+            else
+            {
+                _immobilizedPieces[piece] = turns;
+            }
+        }
+
+        public bool IsPieceImmobilized(Piece piece)
+        {
+            return piece != null && _immobilizedPieces.TryGetValue(piece, out int turns) && turns > 0;
+        }
+
+        public void TickImmobilizationForColor(PieceColor color)
+        {
+            if (_immobilizedPieces.Count == 0) return;
+
+            var keys = new List<Piece>(_immobilizedPieces.Keys);
+            for (int i = 0; i < keys.Count; i++)
+            {
+                Piece p = keys[i];
+                if (p == null)
+                {
+                    _immobilizedPieces.Remove(p);
+                    continue;
+                }
+
+                if (p.Color == color)
+                {
+                    int remaining = _immobilizedPieces[p] - 1;
+                    if (remaining <= 0)
+                    {
+                        _immobilizedPieces.Remove(p);
+                    }
+                    else
+                    {
+                        _immobilizedPieces[p] = remaining;
+                    }
+                }
+            }
+        }
+
+        public void ClearImmobilizedPieces()
+        {
+            _immobilizedPieces.Clear();
+        }
+
+        public void ApplyIntimidation(PieceColor targetColor, int turns = 1)
+        {
+            if (turns <= 0) return;
+            IntimidatedColor = targetColor;
+            IntimidatedTurnsRemaining = Math.Max(IntimidatedTurnsRemaining, turns);
+        }
+
+        public void ClearIntimidation()
+        {
+            IntimidatedTurnsRemaining = 0;
+        }
+
         /// <summary>
         /// Historial de jugadas y despachador de eventos de estado.
         /// </summary>
@@ -223,7 +303,13 @@ namespace ChessBalatro
             HalfmoveClock = 0;
             FullmoveNumber = 1;
             CurrentTurn = PieceColor.White;
+            PendingExtraTurns = 0;
+            ExtraTurnColor = PieceColor.White;
+            IntimidatedColor = PieceColor.Black;
+            IntimidatedTurnsRemaining = 0;
+            _immobilizedPieces.Clear();
             Modifiers.Clear();
+            ActiveCardEffects.Clear();
             History.Clear();
         }
 
@@ -393,7 +479,7 @@ namespace ChessBalatro
         /// </summary>
         public bool IsInCheck(PieceColor kingColor)
         {
-            if (kingColor == PieceColor.White && PetrosianDefenseEffect.IsShieldActive)
+            if (PetrosianDefenseEffect.IsShieldActive && kingColor == PetrosianDefenseEffect.ProtectedColor)
                 return false;
 
             BoardCoord? kingCoord = FindKing(kingColor);
@@ -520,16 +606,26 @@ namespace ChessBalatro
                 BlackCanCastleKingside = this.BlackCanCastleKingside,
                 BlackCanCastleQueenside = this.BlackCanCastleQueenside,
                 HalfmoveClock = this.HalfmoveClock,
-                FullmoveNumber = this.FullmoveNumber
+                FullmoveNumber = this.FullmoveNumber,
+                PendingExtraTurns = this.PendingExtraTurns,
+                ExtraTurnColor = this.ExtraTurnColor,
+                IntimidatedColor = this.IntimidatedColor,
+                IntimidatedTurnsRemaining = this.IntimidatedTurnsRemaining
             };
 
             for (int f = 0; f < BoardSize; f++)
             {
                 for (int r = 0; r < BoardSize; r++)
                 {
-                    if (_grid[f, r] != null)
+                    Piece orig = _grid[f, r];
+                    if (orig != null)
                     {
-                        copy._grid[f, r] = _grid[f, r].Clone();
+                        Piece clonedPiece = orig.Clone();
+                        copy._grid[f, r] = clonedPiece;
+                        if (_immobilizedPieces.TryGetValue(orig, out int frozenTurns) && frozenTurns > 0)
+                        {
+                            copy._immobilizedPieces[clonedPiece] = frozenTurns;
+                        }
                     }
                 }
             }
@@ -581,21 +677,51 @@ namespace ChessBalatro
                 ? this[validMove.To.File, validMove.From.Rank]
                 : this[validMove.To];
 
+            PieceColor movingColor = movingPiece != null ? movingPiece.Color : CurrentTurn;
+            PieceColor opponentColor = movingColor == PieceColor.White ? PieceColor.Black : PieceColor.White;
+
+            // Si una pieza capturada estaba inmovilizada, limpiar su entrada
+            if (capturedPiece != null && _immobilizedPieces.ContainsKey(capturedPiece))
+            {
+                _immobilizedPieces.Remove(capturedPiece);
+            }
+
             // Aplicar el movimiento en la cuadrícula
             ApplyMoveInternal(validMove);
 
-            // Alternar turno
-            CurrentTurn = CurrentTurn == PieceColor.White ? PieceColor.Black : PieceColor.White;
-            if (CurrentTurn == PieceColor.White)
+            // Actualizar estados temporales del bando que acaba de ejecutar su jugada
+            TickImmobilizationForColor(movingColor);
+            if (IntimidatedTurnsRemaining > 0 && IntimidatedColor == movingColor)
             {
-                FullmoveNumber++;
+                IntimidatedTurnsRemaining = Math.Max(0, IntimidatedTurnsRemaining - 1);
             }
 
-            // Evaluar estado para el bando que acaba de recibir el turno
-            bool isCheck = IsInCheck(CurrentTurn);
-            bool hasMoves = MoveValidator.HasLegalMoves(this, CurrentTurn);
+            // Evaluar estado del Rey rival tras la jugada
+            bool isCheck = IsInCheck(opponentColor);
+            bool hasMoves = MoveValidator.HasLegalMoves(this, opponentColor);
             bool isCheckmate = isCheck && !hasMoves;
             bool isStalemate = !isCheck && !hasMoves;
+
+            // Consumir turno extra si el jugador activo dispone de uno (Mijaíl Tal: Bosque Oscuro)
+            bool keptTurn = false;
+            if (!isCheckmate && PendingExtraTurns > 0 && ExtraTurnColor == movingColor)
+            {
+                PendingExtraTurns--;
+                CurrentTurn = movingColor;
+                keptTurn = true;
+            }
+            else
+            {
+                if (isCheckmate)
+                {
+                    PendingExtraTurns = 0;
+                }
+                CurrentTurn = opponentColor;
+                if (CurrentTurn == PieceColor.White)
+                {
+                    FullmoveNumber++;
+                }
+            }
 
             // Crear y persistir el registro en notación algebraica con eventos
             MoveRecord record = new MoveRecord(
@@ -612,9 +738,9 @@ namespace ChessBalatro
 
             History.AddRecord(record);
 
-            if (isStalemate)
+            if (!keptTurn && isStalemate)
             {
-                History.NotifyStalemate(CurrentTurn);
+                History.NotifyStalemate(opponentColor);
             }
 
             return true;

@@ -75,6 +75,11 @@ namespace ChessBalatro
             if (col == null) col = gameObject.AddComponent<CircleCollider2D>();
             col.radius = 0.45f;
             col.isTrigger = true;
+
+            _hasCapturedBaseColors = false;
+            _isImmobilizedVisual = false;
+            _isSacrificeTargetVisual = false;
+            CaptureBaseColorsIfNeeded();
         }
 
         private void CreateOrUpdateTextMesh(Piece piece, Color textColor)
@@ -119,8 +124,60 @@ namespace ChessBalatro
         private int _originalSpriteOrder = 1;
         private int _originalTextOrder = 2;
         private bool _isMoving = false;
+        private Color _baseSpriteColor = Color.white;
+        private Color _baseTextColor = Color.white;
+        private bool _hasCapturedBaseColors = false;
+        private bool _isImmobilizedVisual = false;
+        private bool _isSacrificeTargetVisual = false;
 
         public bool IsAnimating => _isMoving || _activeMoveCoroutine != null || _activeCaptureCoroutine != null;
+
+        private void CaptureBaseColorsIfNeeded()
+        {
+            if (_hasCapturedBaseColors) return;
+            if (spriteRenderer != null) _baseSpriteColor = spriteRenderer.color;
+            if (symbolTextMesh != null) _baseTextColor = symbolTextMesh.color;
+            _hasCapturedBaseColors = true;
+        }
+
+        public void RefreshStatusTint()
+        {
+            if (!_hasCapturedBaseColors) CaptureBaseColorsIfNeeded();
+            if (spriteRenderer == null) return;
+
+            if (_isImmobilizedVisual)
+            {
+                spriteRenderer.color = Color.Lerp(_baseSpriteColor, new Color(0.55f, 0.42f, 0.92f, 0.85f), 0.55f);
+                if (symbolTextMesh != null)
+                {
+                    symbolTextMesh.color = Color.Lerp(_baseTextColor, new Color(0.75f, 0.72f, 0.96f, 0.9f), 0.45f);
+                }
+            }
+            else if (_isSacrificeTargetVisual)
+            {
+                spriteRenderer.color = Color.Lerp(_baseSpriteColor, new Color(0.95f, 0.50f, 1.0f, 1.0f), 0.35f);
+                if (symbolTextMesh != null) symbolTextMesh.color = _baseTextColor;
+            }
+            else
+            {
+                spriteRenderer.color = _baseSpriteColor;
+                if (symbolTextMesh != null) symbolTextMesh.color = _baseTextColor;
+            }
+        }
+
+        public void SetImmobilizedVisual(bool immobilized)
+        {
+            if (_isImmobilizedVisual == immobilized) return;
+            _isImmobilizedVisual = immobilized;
+            RefreshStatusTint();
+        }
+
+        public void SetSacrificeTargetVisual(bool highlighted)
+        {
+            if (_isSacrificeTargetVisual == highlighted) return;
+            _isSacrificeTargetVisual = highlighted;
+            RefreshStatusTint();
+        }
 
         private void OnDisable()
         {
@@ -298,6 +355,31 @@ namespace ChessBalatro
         private void OnMouseDown()
         {
             OnPieceClicked?.Invoke(this);
+        }
+
+        /// <summary>
+        /// Reproduce el efecto sonoro táctil de selección al levantar/elegir esta pieza.
+        /// </summary>
+        public void PlaySelectSound()
+        {
+            RetroAudioManager.Instance?.PlayPieceSelect();
+        }
+
+        /// <summary>
+        /// Reproduce el efecto sonoro correspondiente al finalizar el movimiento de esta pieza.
+        /// </summary>
+        public void PlayMoveSound(bool wasCapture)
+        {
+            if (RetroAudioManager.Instance == null) return;
+
+            if (wasCapture)
+            {
+                RetroAudioManager.Instance.PlayPieceCapture();
+            }
+            else
+            {
+                RetroAudioManager.Instance.PlayPieceMove();
+            }
         }
 
         public void DestroySelf()

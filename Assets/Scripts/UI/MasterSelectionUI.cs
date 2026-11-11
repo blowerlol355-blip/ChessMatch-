@@ -181,18 +181,20 @@ namespace ChessBalatro
         {
             _masterPool.Clear();
 
-            // ── Gran Maestro: Tigrán Petrosián ──────────────────────────────────────────────────
-            PetrosianCardData petrosian = PetrosianCardData.CreateRuntimeInstance();
-            // Asignar ilustración si está disponible en la lista del Inspector
-            if (masterIllustrations != null && masterIllustrations.Count > 0 && masterIllustrations[0] != null)
+            // Registrar las 4 leyendas de Gran Maestro por defecto:
+            // 1. Petrosián  2. Tal  3. Polgár  4. Kaspárov
+            List<CardData> defaults = MasterCardDatabase.CreateDefaultMasterCards();
+            for (int i = 0; i < defaults.Count; i++)
             {
-                petrosian.CardSprite = masterIllustrations[0];
-            }
-            _masterPool.Add(petrosian);
+                CardData master = defaults[i];
+                if (master == null) continue;
 
-            // ── Espacio reservado para futuros Gran Maestros ─────────────────────────────────────
-            // CardData secondMaster = ...; _masterPool.Add(secondMaster);
-            // CardData thirdMaster  = ...; _masterPool.Add(thirdMaster);
+                if (masterIllustrations != null && i < masterIllustrations.Count && masterIllustrations[i] != null)
+                {
+                    master.CardSprite = masterIllustrations[i];
+                }
+                _masterPool.Add(master);
+            }
         }
 
         // ── Construcción de Cards uGUI ─────────────────────────────────────────────────────────────
@@ -207,8 +209,12 @@ namespace ChessBalatro
             _masterCardViews.Clear();
 
             CardManager cm = FindAnyObjectByType<CardManager>();
+            int count = _masterPool.Count;
+            float cardW = count >= 4 ? 170f : 185f;
+            float cardH = count >= 4 ? 250f : 265f;
+            float spacing = count >= 4 ? 185f : 205f;
 
-            for (int i = 0; i < _masterPool.Count; i++)
+            for (int i = 0; i < count; i++)
             {
                 CardData data = _masterPool[i];
                 int      idx  = i;    // capturar para la lambda
@@ -217,17 +223,20 @@ namespace ChessBalatro
                 cardObj.transform.SetParent(cardContainer, false);
 
                 RectTransform rt = cardObj.AddComponent<RectTransform>();
-                rt.sizeDelta = new Vector2(180f, 260f);
-                float spacing = 200f;
-                rt.anchoredPosition = new Vector2((_masterPool.Count == 1 ? 0f : (idx - (_masterPool.Count - 1) * 0.5f) * spacing), 0f);
+                rt.sizeDelta = new Vector2(cardW, cardH);
+                rt.anchoredPosition = new Vector2(count <= 1 ? 0f : (idx - (count - 1) * 0.5f) * spacing, 0f);
 
                 CardView cv = cardObj.AddComponent<CardView>();
+                cv.ApplyCardSize(new Vector2(cardW, cardH));
                 cv.Initialize(data, cm);
 
                 // Asignar ilustración completa si el sprite está disponible
-                if (masterIllustrations != null && idx < masterIllustrations.Count && masterIllustrations[idx] != null)
+                Sprite resolved = (masterIllustrations != null && idx < masterIllustrations.Count && masterIllustrations[idx] != null)
+                    ? masterIllustrations[idx]
+                    : MasterCardDatabase.ResolveSprite(data);
+                if (resolved != null)
                 {
-                    cv.SetIllustrationSprite(masterIllustrations[idx]);
+                    cv.SetIllustrationSprite(resolved);
                 }
 
                 // Animación de entrada
@@ -335,10 +344,11 @@ namespace ChessBalatro
             // Overlay oscuro a pantalla completa
             GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), _overlayTex);
 
-            // Panel centrado
-            float pw = Mathf.Min(800f, Screen.width  * 0.92f);
-            float ph = Mathf.Min(640f, Screen.height * 0.88f);
-            float px = (Screen.width  - pw) * 0.5f;
+            // Panel centrado responsive para 4 Grandes Maestros
+            bool twoRowGrid = (Screen.width < 880f && _masterPool.Count > 2);
+            float pw = Mathf.Min(twoRowGrid ? 620f : 980f, Screen.width * 0.94f);
+            float ph = Mathf.Min(twoRowGrid ? 820f : 650f, Screen.height * 0.92f);
+            float px = (Screen.width - pw) * 0.5f;
             float py = (Screen.height - ph) * 0.5f;
             Rect  panelRect = new Rect(px, py, pw, ph);
 
@@ -347,30 +357,53 @@ namespace ChessBalatro
             GUILayout.BeginArea(panelRect);
 
             // ── Encabezado ────────────────────────────────────────────────────────────
-            GUILayout.Space(22f);
+            GUILayout.Space(14f);
             GUILayout.Label("SELECCIÓN DE GRAN MAESTRO", _titleStyle);
-            GUILayout.Label("Elige tu mejora mayor inicial — tu estilo de juego para esta partida.", _subtitleStyle);
-            GUILayout.Space(18f);
+            GUILayout.Label("Elige tu leyenda inicial — cada Gran Maestro define tu aura y táctica.", _subtitleStyle);
+            GUILayout.Space(12f);
 
-            // ── Tarjeta(s) de Gran Maestro ─────────────────────────────────────────────
-            GUILayout.BeginHorizontal();
-            GUILayout.FlexibleSpace();
-
-            for (int i = 0; i < _masterPool.Count; i++)
+            // ── Tarjetas de Grandes Maestros (4 en fila horizontal o cuadrícula 2x2 en móvil) ─────
+            if (twoRowGrid)
             {
-                CardData data       = _masterPool[i];
-                bool     isSelected = (_selectedMaster == data);
+                float cardW = Mathf.Clamp((pw - 76f) * 0.5f, 180f, 270f);
+                float cardH = Mathf.Clamp((ph - 175f) * 0.5f, 220f, 300f);
 
-                DrawOnGuiMasterCard(data, isSelected, i);
+                for (int row = 0; row < 2; row++)
+                {
+                    GUILayout.BeginHorizontal();
+                    GUILayout.FlexibleSpace();
+                    for (int col = 0; col < 2; col++)
+                    {
+                        int idx = row * 2 + col;
+                        if (idx >= _masterPool.Count) break;
+                        DrawOnGuiMasterCard(_masterPool[idx], _selectedMaster == _masterPool[idx], idx, cardW, cardH, compact: true);
+                        if (col == 0 && idx + 1 < _masterPool.Count) GUILayout.Space(14f);
+                    }
+                    GUILayout.FlexibleSpace();
+                    GUILayout.EndHorizontal();
+                    if (row == 0) GUILayout.Space(12f);
+                }
+            }
+            else
+            {
+                int count = Mathf.Max(1, _masterPool.Count);
+                float gap = 14f;
+                float cardW = Mathf.Clamp((pw - 64f - gap * (count - 1)) / count, 180f, 230f);
+                float cardH = Mathf.Clamp(ph - 180f, 320f, 410f);
 
-                if (i < _masterPool.Count - 1) GUILayout.Space(24f);
+                GUILayout.BeginHorizontal();
+                GUILayout.FlexibleSpace();
+                for (int i = 0; i < _masterPool.Count; i++)
+                {
+                    DrawOnGuiMasterCard(_masterPool[i], _selectedMaster == _masterPool[i], i, cardW, cardH, compact: false);
+                    if (i < _masterPool.Count - 1) GUILayout.Space(gap);
+                }
+                GUILayout.FlexibleSpace();
+                GUILayout.EndHorizontal();
             }
 
-            GUILayout.FlexibleSpace();
-            GUILayout.EndHorizontal();
-
             // ── Botón Confirmar ────────────────────────────────────────────────────────
-            GUILayout.Space(28f);
+            GUILayout.FlexibleSpace();
             GUILayout.BeginHorizontal();
             GUILayout.FlexibleSpace();
 
@@ -381,7 +414,7 @@ namespace ChessBalatro
                 ? "✔  CONFIRMAR Y COMENZAR RONDA"
                 : "Selecciona un Gran Maestro para continuar...";
 
-            if (GUILayout.Button(btnLabel, canConfirm ? _confirmBtnStyle : _subtitleStyle, GUILayout.Height(48f), GUILayout.Width(380f)))
+            if (GUILayout.Button(btnLabel, canConfirm ? _confirmBtnStyle : _subtitleStyle, GUILayout.Height(46f), GUILayout.Width(Mathf.Min(380f, pw - 40f))))
             {
                 ConfirmSelection();
             }
@@ -390,54 +423,57 @@ namespace ChessBalatro
             GUILayout.FlexibleSpace();
             GUILayout.EndHorizontal();
 
-            GUILayout.Space(16f);
+            GUILayout.Space(12f);
             GUILayout.EndArea();
         }
 
-        private void DrawOnGuiMasterCard(CardData data, bool isSelected, int index)
+        private void DrawOnGuiMasterCard(CardData data, bool isSelected, int index, float cw, float ch, bool compact)
         {
-            float cw = 220f;
-            float ch = 360f;
-
+            Color auraColor = MasterCardDatabase.GetCardAuraColor(data);
             GUIStyle frameStyle = isSelected ? _cardFrameSelectedStyle : _cardFrameStyle;
 
+            Color prevBg = GUI.backgroundColor;
+            GUI.backgroundColor = isSelected ? Color.Lerp(auraColor, Color.white, 0.35f) : Color.white;
             GUILayout.BeginVertical(frameStyle, GUILayout.Width(cw), GUILayout.Height(ch));
+            GUI.backgroundColor = prevBg;
 
-            // Sprite de arte (Inspector o directamente del CardData)
+            // Sprite de arte (Inspector o MasterCardDatabase)
             Sprite spr = (masterIllustrations != null && index < masterIllustrations.Count && masterIllustrations[index] != null)
                          ? masterIllustrations[index]
-                         : data.CardSprite;
+                         : MasterCardDatabase.ResolveSprite(data);
 
-            if (spr != null)
+            float artHeight = compact ? Mathf.Clamp(ch * 0.42f, 92f, 128f) : Mathf.Clamp(ch * 0.44f, 130f, 175f);
+            if (spr != null && spr.texture != null)
             {
-                Texture2D tex = spr.texture;
-                Rect artRect = GUILayoutUtility.GetRect(cw - 20f, 160f);
-                GUI.DrawTexture(artRect, tex, ScaleMode.ScaleToFit);
+                Rect artRect = GUILayoutUtility.GetRect(cw - 20f, artHeight);
+                DrawSpriteFit(artRect, spr);
             }
             else
             {
-                // Placeholder de color dorado procedural
                 Color savedColor = GUI.color;
-                GUI.color = new Color(1f, 0.85f, 0.25f, 0.55f);
-                GUILayout.Box("🎭", _titleStyle, GUILayout.Width(cw - 20f), GUILayout.Height(160f));
+                GUI.color = auraColor;
+                GUILayout.Box("🎭", _titleStyle, GUILayout.Width(cw - 20f), GUILayout.Height(artHeight));
                 GUI.color = savedColor;
             }
 
-            GUILayout.Space(8f);
+            GUILayout.Space(compact ? 4f : 6f);
 
-            // Tipo de carta
+            // Subtítulo / Habilidad de Gran Maestro con su color de aura
+            string subtitle = MasterCardDatabase.GetCardSubtitle(data);
             Color oldColor = GUI.color;
-            GUI.color = new Color(1f, 0.85f, 0.2f);
-            GUILayout.Label("GRAN MAESTRO / MEJORA MAYOR", _typeStyle);
+            GUI.color = auraColor;
+            GUILayout.Label(string.IsNullOrEmpty(subtitle) ? "GRAN MAESTRO" : subtitle.ToUpperInvariant(), _typeStyle);
             GUI.color = oldColor;
 
-            // Título
-            GUILayout.Label(data.CardName, _titleStyle);
+            // Título y coste
+            GUIStyle cardTitle = new GUIStyle(_titleStyle) { fontSize = compact ? 13 : 15 };
+            GUILayout.Label($"{data.CardName} (${data.Cost})", cardTitle);
 
-            GUILayout.Space(4f);
+            GUILayout.Space(2f);
 
             // Descripción
-            GUILayout.Label(data.Description, _descStyle);
+            GUIStyle desc = new GUIStyle(_descStyle) { fontSize = compact ? 10 : 11 };
+            GUILayout.Label(data.Description, desc);
 
             GUILayout.FlexibleSpace();
 
@@ -445,21 +481,51 @@ namespace ChessBalatro
             if (isSelected)
             {
                 oldColor = GUI.color;
-                GUI.color = new Color(1f, 0.92f, 0.25f);
+                GUI.color = auraColor;
                 GUILayout.Label("✔  SELECCIONADO", _typeStyle);
                 GUI.color = oldColor;
             }
             else
             {
-                if (GUILayout.Button("Seleccionar", GUILayout.Height(32f)))
+                if (GUILayout.Button("Seleccionar", GUILayout.Height(compact ? 26f : 30f)))
                 {
                     _selectedMaster = data;
                     Debug.Log($"<color=#FFD700>[MasterSelectionUI] Gran Maestro seleccionado (OnGUI): <b>{data.CardName}</b></color>");
                 }
             }
 
-            GUILayout.Space(8f);
+            GUILayout.Space(4f);
             GUILayout.EndVertical();
+        }
+
+        private static void DrawSpriteFit(Rect targetRect, Sprite sprite)
+        {
+            if (sprite == null || sprite.texture == null) return;
+
+            Texture2D tex = sprite.texture;
+            Rect tr = sprite.rect;
+            Rect uv = new Rect(
+                tr.x / tex.width,
+                tr.y / tex.height,
+                tr.width / tex.width,
+                tr.height / tex.height
+            );
+
+            float spriteAspect = tr.width / Mathf.Max(1f, tr.height);
+            float rectAspect = targetRect.width / Mathf.Max(1f, targetRect.height);
+            Rect drawRect = targetRect;
+            if (spriteAspect > rectAspect)
+            {
+                float h = targetRect.width / spriteAspect;
+                drawRect = new Rect(targetRect.x, targetRect.y + (targetRect.height - h) * 0.5f, targetRect.width, h);
+            }
+            else
+            {
+                float w = targetRect.height * spriteAspect;
+                drawRect = new Rect(targetRect.x + (targetRect.width - w) * 0.5f, targetRect.y, w, targetRect.height);
+            }
+
+            GUI.DrawTextureWithTexCoords(drawRect, tex, uv, true);
         }
 
         // ── Inicialización de estilos OnGUI ───────────────────────────────────────────────────────

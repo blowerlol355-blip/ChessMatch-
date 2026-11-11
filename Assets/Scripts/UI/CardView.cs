@@ -206,18 +206,22 @@ namespace ChessBalatro
             if (titleText != null)
             {
                 string displayTitle = data.CardName;
-                if (displayTitle.Contains("Tigrán Petrosián"))
-                {
-                    displayTitle = "Tigrán Petrosián";
-                }
+                if (displayTitle.Contains("Tigrán Petrosián")) displayTitle = "Tigrán Petrosián";
+                else if (displayTitle.Contains("Mijaíl Tal")) displayTitle = "Mijaíl Tal";
+                else if (displayTitle.Contains("Judit Polgár")) displayTitle = "Judit Polgár";
+                else if (displayTitle.Contains("Garry Kaspárov")) displayTitle = "Garry Kaspárov";
                 titleText.text = displayTitle;
             }
             if (descriptionText != null) descriptionText.text = data.Description;
             if (costText != null) costText.text = $"${data.Cost}";
-            if (rarityText != null) rarityText.text = GetRarityLabel(data.Rarity);
+            if (rarityText != null)
+            {
+                string sub = MasterCardDatabase.GetCardSubtitle(data);
+                rarityText.text = !string.IsNullOrEmpty(sub) ? sub.ToUpperInvariant() : GetRarityLabel(data.Rarity);
+            }
 
-            // Sprite de arte: prioridad a ilustración completa -> CardSprite -> Sprite de ficha de ajedrez fallback
-            Sprite effectiveSprite = illustrationSprite != null ? illustrationSprite : data.CardSprite;
+            // Sprite de arte: prioridad a ilustración completa -> CardSprite -> MasterCardDatabase -> Sprite de ficha fallback
+            Sprite effectiveSprite = illustrationSprite != null ? illustrationSprite : MasterCardDatabase.ResolveSprite(data);
             if (effectiveSprite == null)
             {
                 effectiveSprite = ResolvePieceFallbackSprite(data.CardName);
@@ -235,12 +239,12 @@ namespace ChessBalatro
                 else
                 {
                     artworkImage.sprite = null;
-                    artworkImage.color = GetRarityAccentColor(data.Rarity);
+                    artworkImage.color = MasterCardDatabase.GetCardAuraColor(data);
                 }
             }
 
-            // Aplicar paleta de colores según rareza (estilo Balatro)
-            ApplyRarityStyling(data.Rarity);
+            // Aplicar paleta de colores según aura/rareza (estilo Balatro)
+            ApplyCardStyling(data);
         }
 
         /// <summary>
@@ -249,6 +253,9 @@ namespace ChessBalatro
         private Sprite ResolvePieceFallbackSprite(string cardName)
         {
             if (string.IsNullOrEmpty(cardName)) return null;
+
+            Sprite masterSpr = MasterCardDatabase.ResolveMasterSpriteByName(cardName);
+            if (masterSpr != null) return masterSpr;
 
             string lower = cardName.ToLowerInvariant();
             if (lower.Contains("petrosián") || lower.Contains("petrosian") || lower.Contains("tigrán") || lower.Contains("tigran"))
@@ -262,11 +269,11 @@ namespace ChessBalatro
             {
                 targetType = PieceType.Pawn;
             }
-            else if (lower.Contains("caball") || lower.Contains("knight") || lower.Contains("salto"))
+            else if (lower.Contains("caball") || lower.Contains("knight") || lower.Contains("salto") || lower.Contains("tal") || lower.Contains("mago"))
             {
                 targetType = PieceType.Knight;
             }
-            else if (lower.Contains("alfil") || lower.Contains("bishop"))
+            else if (lower.Contains("alfil") || lower.Contains("bishop") || lower.Contains("impulso"))
             {
                 targetType = PieceType.Bishop;
             }
@@ -274,11 +281,11 @@ namespace ChessBalatro
             {
                 targetType = PieceType.Rook;
             }
-            else if (lower.Contains("dama") || lower.Contains("reina") || lower.Contains("queen"))
+            else if (lower.Contains("dama") || lower.Contains("reina") || lower.Contains("queen") || lower.Contains("amazona") || lower.Contains("capablanca"))
             {
                 targetType = PieceType.Queen;
             }
-            else if (lower.Contains("rey") || lower.Contains("king"))
+            else if (lower.Contains("rey") || lower.Contains("king") || lower.Contains("trinchera"))
             {
                 targetType = PieceType.King;
             }
@@ -493,6 +500,8 @@ namespace ChessBalatro
         public void OnPointerClick(PointerEventData eventData)
         {
             if (!IsInteractable) return;
+            if (CaptureRewardManager.Instance != null && CaptureRewardManager.Instance.IsDraftOpen) return;
+            if (OnboardingManager.IsOnboardingActive && !OnboardingManager.IsCardClickAllowed(this)) return;
 
             transform.localScale = Vector3.one * (activeScale * 1.08f);
 
@@ -512,6 +521,7 @@ namespace ChessBalatro
         public void OnPointerEnter(PointerEventData eventData)
         {
             if (!IsInteractable) return;
+            if (OnboardingManager.IsOnboardingActive && !OnboardingManager.IsCardClickAllowed(this)) return;
             _isHovered = true;
             // Al hacer hover, elevar la carta a la cima de la jerarquía para que destaque
             transform.SetAsLastSibling();
@@ -528,6 +538,7 @@ namespace ChessBalatro
         public void OnPointerDown(PointerEventData eventData)
         {
             if (!IsInteractable) return;
+            if (OnboardingManager.IsOnboardingActive && !OnboardingManager.IsCardClickAllowed(this)) return;
             _isPressed = true;
             _targetScale = Vector3.one * 0.98f;
         }
@@ -854,7 +865,9 @@ namespace ChessBalatro
 
         private IEnumerator PulseGlowRoutine()
         {
-            Color baseColor = cardData != null ? GetRarityAccentColor(cardData.Rarity) : new Color(0.98f, 0.85f, 0.25f, 1f);
+            Color baseColor = cardData != null
+                ? (cardData.HasCustomAuraColor ? cardData.AuraColor : GetRarityAccentColor(cardData.Rarity))
+                : new Color(0.98f, 0.85f, 0.25f, 1f);
             baseColor.a = 1f;
 
             while (_isActivated && glowOutline != null)
@@ -898,6 +911,28 @@ namespace ChessBalatro
                     return new Color(0.72f, 0.32f, 0.98f, 1.0f); // Púrpura Místico
                 default:
                     return Color.white;
+            }
+        }
+
+        private void ApplyCardStyling(CardData data)
+        {
+            Color accent = (data != null && data.HasCustomAuraColor)
+                ? data.AuraColor
+                : GetRarityAccentColor(data != null ? data.Rarity : CardRarity.Common);
+
+            if (cardHeaderImage != null)
+            {
+                cardHeaderImage.color = accent;
+            }
+
+            if (rarityText != null)
+            {
+                rarityText.color = accent;
+            }
+
+            if (glowOutline != null)
+            {
+                glowOutline.effectColor = accent;
             }
         }
 

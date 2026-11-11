@@ -26,6 +26,32 @@ namespace ChessBalatro
         [SerializeField] private bool showOnScreenUI = true;
         [SerializeField] private Vector2 onScreenPosition = new Vector2(16f, 16f); // Esquina superior derecha (offset desde borde derecho)
 
+        public bool ShowOnScreenUI
+        {
+            get => showOnScreenUI;
+            set => showOnScreenUI = value;
+        }
+
+        public void SetVisible(bool visible)
+        {
+            showOnScreenUI = visible;
+            enabled = visible;
+
+            SetOptionalControlActive(difficultyDropdown, visible);
+            SetOptionalControlActive(easyButton, visible);
+            SetOptionalControlActive(mediumButton, visible);
+            SetOptionalControlActive(hardButton, visible);
+            SetOptionalControlActive(currentDifficultyText, visible);
+        }
+
+        private void SetOptionalControlActive(Component comp, bool visible)
+        {
+            if (comp != null && comp.gameObject != gameObject)
+            {
+                comp.gameObject.SetActive(visible);
+            }
+        }
+
         public AIDifficulty CurrentDifficulty => _currentDifficulty;
         public event Action<AIDifficulty> OnDifficultySelected;
 
@@ -275,14 +301,17 @@ namespace ChessBalatro
 
         private void OnGUI()
         {
-            if (!showOnScreenUI) return;
+            if (!showOnScreenUI || TutorialController.IsEducationalModeActive || OnboardingManager.IsOnboardingGameplayActive || GameManager.SelectedGameMode == GameMode.Arcade || ArcadeSurvivorController.IsArcadeModeActive) return;
+            if (GameManager.Instance != null && GameManager.Instance.CurrentState != GameState.Playing) return;
 
             InitStylesIfNeeded();
 
-            float panelWidth = 260f;
+            float safeTop = Mathf.Max(0f, Screen.height - Screen.safeArea.yMax);
+            float panelWidth = Mathf.Min(260f, Screen.width - 32f);
             float panelHeight = 84f;
             float posX = Screen.width - panelWidth - onScreenPosition.x;
-            float posY = onScreenPosition.y;
+            float minTopY = safeTop + (MainMenuController.IsFloatingPauseButtonVisible ? 70f : 0f);
+            float posY = Mathf.Max(safeTop + onScreenPosition.y, minTopY);
 
             Rect panelRect = new Rect(posX, posY, panelWidth, panelHeight);
             GUI.Box(panelRect, GUIContent.none, _panelStyle);

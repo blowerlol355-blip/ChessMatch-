@@ -40,10 +40,16 @@ namespace ChessBalatro
             // 1. Obtener movimientos geométricos (pseudo-legales)
             List<Move> pseudoMoves = GetPseudoLegalMoves(board, from);
 
-            // 2. Simular cada movimiento y filtrar aquellos que dejen al rey en jaque
+            // 2. Simular cada movimiento y filtrar aquellos que dejen al rey en jaque o capturen al Rey rival
             for (int i = 0; i < pseudoMoves.Count; i++)
             {
                 Move move = pseudoMoves[i];
+                Piece targetPiece = board[move.To];
+                if ((targetPiece != null && targetPiece.Type == PieceType.King) ||
+                    (move.PieceCaptured != null && move.PieceCaptured.Type == PieceType.King))
+                {
+                    continue;
+                }
 
                 // Simulación eficiente sin instanciar un nuevo tablero completo
                 BoardMoveUndo undo = board.SimulateMove(move);
@@ -70,6 +76,12 @@ namespace ChessBalatro
 
             Piece piece = board[from];
             if (piece == null) return moves;
+
+            // Piezas inmovilizadas (ej. por Mijaíl Tal: Bosque Oscuro) no pueden desplazarse durante su turno
+            if (board.IsPieceImmobilized(piece))
+            {
+                return moves;
+            }
 
             // Movimientos estándar según la geometría de la pieza
             switch (piece.Type)

@@ -16,6 +16,7 @@ namespace ChessBalatro
     {
         [Header("Referencias Principales")]
         [SerializeField] private BoardView boardView;
+        [SerializeField] private BoardManager boardManager;
         [SerializeField] private Camera inputCamera;
 
         [Header("Tiempos de Animación")]
@@ -69,7 +70,38 @@ namespace ChessBalatro
 
         // Estado de selección y control
         public bool IsInteractionLocked { get; private set; } = false;
+        public bool IsRewardDraftBlocking { get; set; } = false;
+        public bool IsExternalPauseActive =>
+            IsRewardDraftBlocking ||
+            (CaptureRewardManager.Instance != null && CaptureRewardManager.Instance.IsDraftOpen) ||
+            OnboardingManager.ShouldBlockBoardInteraction;
         public BoardCoord? SelectedCoord => _selectedCoord;
+
+        public void BindBoardManager(BoardManager manager)
+        {
+            if (manager != null) boardManager = manager;
+        }
+
+        private BoardManager ResolveBoardManager()
+        {
+            if (boardManager == null) boardManager = GetComponent<BoardManager>() ?? FindAnyObjectByType<BoardManager>();
+            return boardManager;
+        }
+
+        /// <summary>
+        /// Detiene animaciones/corutinas en curso (turnos de IA o movimientos pendientes) al reiniciar o cambiar de modo.
+        /// </summary>
+        public void CancelPendingMoves()
+        {
+            StopAllCoroutines();
+            IsInteractionLocked = false;
+            IsRewardDraftBlocking = false;
+            ClearSelectionVisuals();
+            ClearTalSacrificeHighlights();
+            _selectedCoord = null;
+            _legalMoves.Clear();
+            if (boardView != null) boardView.ClearHighlights();
+        }
 
         /// <summary>
         /// Filtro o validador opcional inyectado externamente (ej. Modo Educativo / Tutorial).
@@ -111,18 +143,35 @@ namespace ChessBalatro
             if (inputCamera == null) inputCamera = Camera.main;
         }
 
+        private void OnEnable()
+        {
+            MikhailTalEffect.OnSacrificeTargetingStarted -= HandleTalSacrificeTargetingStarted;
+            MikhailTalEffect.OnSacrificeTargetingStarted += HandleTalSacrificeTargetingStarted;
+            MikhailTalEffect.OnSacrificeTargetingCancelled -= HandleTalSacrificeTargetingCancelled;
+            MikhailTalEffect.OnSacrificeTargetingCancelled += HandleTalSacrificeTargetingCancelled;
+        }
+
         private void OnDisable()
         {
+            MikhailTalEffect.OnSacrificeTargetingStarted -= HandleTalSacrificeTargetingStarted;
+            MikhailTalEffect.OnSacrificeTargetingCancelled -= HandleTalSacrificeTargetingCancelled;
             IsInteractionLocked = false;
+            IsRewardDraftBlocking = false;
             ClearSelectionVisuals();
+            ClearTalSacrificeHighlights();
             _selectedCoord = null;
             _legalMoves.Clear();
         }
 
         private void Update()
         {
+            if (GameManager.SelectedGameMode == GameMode.Arcade || ArcadeSurvivorController.IsArcadeModeActive) return;
+
             // Bloquear interacción si el juego no está en estado activo de juego (Playing)
             if (GameManager.Instance != null && GameManager.Instance.CurrentState != GameState.Playing) return;
+
+            // Bloquear si está abierto un modal externo (ej. Draft de recompensas)
+            if (IsExternalPauseActive) return;
 
             // Requisito 2c: Bloquear cualquier selección o interacción si una pieza está animando
             if (IsInteractionLocked) return;
@@ -238,8 +287,10 @@ namespace ChessBalatro
         public void ProcessSquareSelection(BoardCoord clickedCoord)
         {
             if (GameManager.Instance != null && GameManager.Instance.CurrentState != GameState.Playing) return;
+            if (IsExternalPauseActive) return;
             if (IsInteractionLocked) return;
             if (boardView == null || boardView.BoardState == null) return;
+            if (OnboardingManager.IsOnboardingActive && !OnboardingManager.IsBoardSquareClickAllowed(clickedCoord)) return;
 
             // Evitar doble despacho en el mismo fotograma entre Update() y eventos OnMouseDown()
             if (Time.frameCount == _lastProcessedFrame && _lastProcessedCoord.HasValue && _lastProcessedCoord.Value.Equals(clickedCoord))
@@ -250,6 +301,22 @@ namespace ChessBalatro
             _lastProcessedCoord = clickedCoord;
 
             BoardState state = boardView.BoardState;
+
+            // Modo selección de sacrificio (Mijaíl Tal: Bosque Oscuro)
+            if (TryGetAwaitingTalEffect(state, out MikhailTalEffect awaitingTal))
+            {
+                Piece sacrificeCandidate = state[clickedCoord];
+                if (MikhailTalEffect.IsValidSacrificePiece(sacrificeCandidate, awaitingTal.ActiveColor))
+                {
+                    StartCoroutine(ExecuteTalSacrificeRoutine(awaitingTal, clickedCoord));
+                }
+                else
+                {
+                    HighlightTalSacrificeTargets(awaitingTal);
+                    Debug.Log("<color=#C066FF>[BoardInputHandler] Toca un Caballo, Alfil, Torre o Dama aliado para sacrificarlo, o pulsa CANCELAR en la carta.</color>");
+                }
+                return;
+            }
 
             // Flujo b: Si ya había una pieza seleccionada y se toca una casilla legal marcada, ejecutar jugada
             if (_selectedCoord.HasValue)
@@ -286,9 +353,16 @@ namespace ChessBalatro
         /// </summary>
         public void RefreshLegalMoves()
         {
+            if (boardView != null && boardView.BoardState != null &&
+                TryGetAwaitingTalEffect(boardView.BoardState, out MikhailTalEffect awaitingTal))
+            {
+                HighlightTalSacrificeTargets(awaitingTal);
+                return;
+            }
+
             if (_selectedCoord.HasValue && boardView != null && boardView.BoardState != null)
             {
-                SelectPiece(_selectedCoord.Value);
+                SelectPiece(_selectedCoord.Value, false);
             }
         }
 
@@ -296,6 +370,14 @@ namespace ChessBalatro
         /// Selecciona una pieza, ilumina su casilla de origen e instancia/marca los indicadores de movimiento legal.
         /// </summary>
         public void SelectPiece(BoardCoord coord)
+        {
+            SelectPiece(coord, true);
+        }
+
+        /// <summary>
+        /// Selecciona una pieza, ilumina su casilla de origen, despliega indicadores legales y reproduce SFX opcionalmente.
+        /// </summary>
+        public void SelectPiece(BoardCoord coord, bool playAudio)
         {
             ClearSelectionVisuals();
 
@@ -322,6 +404,19 @@ namespace ChessBalatro
 
             // Instanciar / desplegar indicadores semitransparentes en cada casilla destino
             SpawnMoveIndicators(_legalMoves);
+
+            if (playAudio)
+            {
+                PieceView selectedPieceView = boardView != null ? boardView.GetPieceView(coord) : null;
+                if (selectedPieceView != null)
+                {
+                    selectedPieceView.PlaySelectSound();
+                }
+                else
+                {
+                    RetroAudioManager.Instance?.PlayPieceSelect();
+                }
+            }
 
             OnPieceSelected?.Invoke(coord);
         }
@@ -364,6 +459,11 @@ namespace ChessBalatro
                 : to;
 
             PieceView capturedPieceView = boardView.GetPieceView(capturedCoord);
+            Piece capturedPieceSnapshot = move.PieceCaptured ?? boardView.BoardState[capturedCoord];
+            Piece movingPieceSnapshot = move.PieceMoved ?? boardView.BoardState[from];
+            bool wasCapture = capturedPieceView != null
+                || capturedPieceSnapshot != null
+                || move.IsEnPassant;
 
             // 1. Iniciar animación de captura si corresponde (desvanecimiento y escala reducida)
             if (capturedPieceView != null)
@@ -427,6 +527,76 @@ namespace ChessBalatro
             // 4. Aplicar jugada a nivel lógico matemático (BoardState actualiza turno y MoveHistory registra)
             bool moveSuccess = boardView.BoardState.MakeMove(move);
 
+            // 4b. Reproducir efectos sonoros retro al finalizar la animación de movimiento (jugador e IA)
+            if (moveSuccess)
+            {
+                MoveRecord? lastRecord = boardView.BoardState.History?.LastMove;
+                Piece finalCapturedPiece = (lastRecord.HasValue && lastRecord.Value.pieceCaptured != null)
+                    ? lastRecord.Value.pieceCaptured
+                    : capturedPieceSnapshot;
+                Piece finalMovingPiece = (lastRecord.HasValue && lastRecord.Value.pieceMoved != null)
+                    ? lastRecord.Value.pieceMoved
+                    : movingPieceSnapshot;
+                bool provokedCheckmate = lastRecord.HasValue && lastRecord.Value.isCheckmate;
+                PieceColor enemySide = finalMovingPiece != null
+                    ? (finalMovingPiece.Color == PieceColor.White ? PieceColor.Black : PieceColor.White)
+                    : boardView.BoardState.CurrentTurn;
+                bool provokedCheck = (lastRecord.HasValue && lastRecord.Value.isCheck)
+                    || boardView.BoardState.IsInCheck(enemySide);
+                bool didCapture = wasCapture || finalCapturedPiece != null;
+
+                if (movingPieceView != null)
+                {
+                    movingPieceView.PlayMoveSound(didCapture);
+                }
+                else if (RetroAudioManager.Instance != null)
+                {
+                    if (didCapture) RetroAudioManager.Instance.PlayPieceCapture();
+                    else RetroAudioManager.Instance.PlayPieceMove();
+                }
+
+                if (provokedCheck)
+                {
+                    RetroAudioManager.Instance?.PlayCheckAlert();
+                }
+
+                // 4c. Notificar economía de puntos por captura / Jaque antes de evaluar el turno de IA
+                BoardManager bm = ResolveBoardManager();
+                if (bm != null)
+                {
+                    Vector3 captureWorldPos = boardView.CoordToWorldPosition(capturedCoord);
+                    if (finalCapturedPiece != null)
+                    {
+                        bm.NotifyPieceCaptured(new PieceCaptureEventData
+                        {
+                            CapturedPiece = finalCapturedPiece,
+                            CapturingPiece = finalMovingPiece,
+                            CaptureCoord = capturedCoord,
+                            WorldPosition = captureWorldPos,
+                            DeliveredCheck = provokedCheck,
+                            IsCheckmate = provokedCheckmate,
+                            Move = move
+                        });
+                    }
+                    else if (provokedCheck)
+                    {
+                        PieceColor enemyColor = finalMovingPiece != null
+                            ? (finalMovingPiece.Color == PieceColor.White ? PieceColor.Black : PieceColor.White)
+                            : boardView.BoardState.CurrentTurn;
+                        BoardCoord? checkedKingCoord = boardView.BoardState.FindKing(enemyColor);
+                        Vector3 checkPopupPos = checkedKingCoord.HasValue
+                            ? boardView.CoordToWorldPosition(checkedKingCoord.Value)
+                            : targetWorldPos;
+                        bm.NotifyCheckDelivered(
+                            finalMovingPiece,
+                            checkedKingCoord ?? to,
+                            checkPopupPos,
+                            provokedCheckmate
+                        );
+                    }
+                }
+            }
+
             // 5. Si hubo coronación de peón, actualizar el aspecto visual de la pieza coronada
             if (moveSuccess && move.PromotionType != PieceType.None && movingPieceView != null)
             {
@@ -437,7 +607,8 @@ namespace ChessBalatro
                 }
             }
 
-            // Refrescar resaltados de jaque / mate en los reyes
+            // Refrescar tintes visuales de estado (inmovilizaciones) y resaltados de jaque / mate
+            boardView.RefreshPieceStatusVisuals();
             boardView.UpdateCheckHighlight();
 
             _selectedCoord = null;
@@ -448,6 +619,23 @@ namespace ChessBalatro
 
             boardView?.NotifyMoveExecuted(move);
             OnMoveCompleted?.Invoke(move);
+
+            // Pausar brevemente la IA si se abrió un modal de Draft de recompensas
+            while (IsExternalPauseActive)
+            {
+                if (GameManager.Instance != null && GameManager.Instance.CurrentState != GameState.Playing)
+                {
+                    IsInteractionLocked = false;
+                    yield break;
+                }
+                yield return null;
+            }
+
+            if (GameManager.Instance != null && GameManager.Instance.CurrentState != GameState.Playing)
+            {
+                IsInteractionLocked = false;
+                yield break;
+            }
 
             // Requisito 2: Al finalizar el movimiento, si el turno pasa a las Negras (IA), ejecutar su turno automáticamente
             if (enableAI && boardView != null && boardView.BoardState != null &&
@@ -474,12 +662,39 @@ namespace ChessBalatro
         public IEnumerator ExecuteAITurn()
         {
             IsInteractionLocked = true;
+
+            while (IsExternalPauseActive)
+            {
+                if (GameManager.Instance != null && GameManager.Instance.CurrentState != GameState.Playing)
+                {
+                    IsInteractionLocked = false;
+                    yield break;
+                }
+                yield return null;
+            }
+
             OnAITurnStarted?.Invoke();
 
             // Pausa intencional de 0.5s para simular "pensamiento"
             if (aiThinkingDelay > 0f)
             {
                 yield return new WaitForSeconds(aiThinkingDelay);
+            }
+
+            while (IsExternalPauseActive)
+            {
+                if (GameManager.Instance != null && GameManager.Instance.CurrentState != GameState.Playing)
+                {
+                    IsInteractionLocked = false;
+                    yield break;
+                }
+                yield return null;
+            }
+
+            if (GameManager.Instance != null && GameManager.Instance.CurrentState != GameState.Playing)
+            {
+                IsInteractionLocked = false;
+                yield break;
             }
 
             if (boardView == null || boardView.BoardState == null)
@@ -553,6 +768,125 @@ namespace ChessBalatro
                 StartCoroutine(ExecuteAITurn());
             }
         }
+
+        #region Flujo Interactivo: Mijaíl Tal (Bosque Oscuro)
+
+        private bool TryGetAwaitingTalEffect(BoardState state, out MikhailTalEffect awaitingTal)
+        {
+            if (state != null && state.ActiveCardEffects != null)
+            {
+                for (int i = 0; i < state.ActiveCardEffects.Count; i++)
+                {
+                    if (state.ActiveCardEffects[i] is MikhailTalEffect tal && tal.IsAwaitingSacrificeTarget)
+                    {
+                        awaitingTal = tal;
+                        return true;
+                    }
+                }
+            }
+
+            CardManager cm = CardManager.Instance ?? FindAnyObjectByType<CardManager>();
+            if (cm != null && cm.TryGetAwaitingTalEffect(out awaitingTal))
+            {
+                return true;
+            }
+
+            awaitingTal = null;
+            return false;
+        }
+
+        private void HandleTalSacrificeTargetingStarted(PieceColor ownerColor)
+        {
+            if (boardView == null || boardView.BoardState == null) return;
+            if (TryGetAwaitingTalEffect(boardView.BoardState, out MikhailTalEffect tal))
+            {
+                HighlightTalSacrificeTargets(tal);
+            }
+        }
+
+        private void HandleTalSacrificeTargetingCancelled()
+        {
+            ClearTalSacrificeHighlights();
+            if (boardView != null) boardView.ClearHighlights();
+        }
+
+        private void HighlightTalSacrificeTargets(MikhailTalEffect tal)
+        {
+            if (boardView == null || boardView.BoardState == null || tal == null) return;
+
+            ClearSelectionVisuals();
+            ClearTalSacrificeHighlights();
+            _selectedCoord = null;
+            _legalMoves.Clear();
+            boardView.ClearHighlights();
+
+            Color talViolet = new Color(0.76f, 0.30f, 1.00f, 0.90f);
+            List<BoardCoord> validCoords = MikhailTalEffect.GetValidSacrificeCoords(boardView.BoardState, tal.ActiveColor);
+
+            for (int i = 0; i < validCoords.Count; i++)
+            {
+                BoardCoord coord = validCoords[i];
+                boardView.HighlightSquare(coord, talViolet);
+                PieceView pv = boardView.GetPieceView(coord);
+                pv?.SetSacrificeTargetVisual(true);
+            }
+        }
+
+        private void ClearTalSacrificeHighlights()
+        {
+            if (boardView == null) return;
+
+            for (int f = 0; f < BoardState.BoardSize; f++)
+            {
+                for (int r = 0; r < BoardState.BoardSize; r++)
+                {
+                    PieceView pv = boardView.GetPieceView(new BoardCoord(f, r));
+                    pv?.SetSacrificeTargetVisual(false);
+                }
+            }
+        }
+
+        private IEnumerator ExecuteTalSacrificeRoutine(MikhailTalEffect tal, BoardCoord sacrificeCoord)
+        {
+            IsInteractionLocked = true;
+            ClearSelectionVisuals();
+            ClearTalSacrificeHighlights();
+            boardView.ClearHighlights();
+            _selectedCoord = null;
+            _legalMoves.Clear();
+
+            PieceView victimView = boardView.GetPieceView(sacrificeCoord);
+            BoardManager bm = ResolveBoardManager();
+            Vector3 worldPos = boardView.CoordToWorldPosition(sacrificeCoord);
+
+            bool ok = tal.ExecuteSacrifice(boardView.BoardState, sacrificeCoord, bm);
+            if (!ok)
+            {
+                IsInteractionLocked = false;
+                yield break;
+            }
+
+            if (victimView != null)
+            {
+                victimView.CaptureAndDestroy(captureDuration);
+                boardView.ClearPieceViewAt(sacrificeCoord);
+            }
+
+            RetroAudioManager.Instance?.PlayPieceCapture();
+
+            boardView.RefreshPieceStatusVisuals();
+            boardView.UpdateCheckHighlight();
+
+            CardManager cm = CardManager.Instance ?? FindAnyObjectByType<CardManager>();
+            cm?.ConsumeImmediateEffectCard(tal);
+
+            CaptureRewardManager.Instance?.NotifyCustomPopup(worldPos, "+2 TURNOS!", true);
+
+            yield return new WaitForSeconds(captureDuration);
+            IsInteractionLocked = false;
+        }
+
+        #endregion
 
         #region Indicadores Visuales Procedurales (Puntos y Marcos)
 

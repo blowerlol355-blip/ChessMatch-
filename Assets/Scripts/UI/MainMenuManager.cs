@@ -48,6 +48,7 @@ namespace ChessBalatro
         [Header("Botones Panel Principal")]
         [SerializeField] private Button playButton;
         [SerializeField] private Button modesButton;
+        [SerializeField] private Button tutorialButton;
         [SerializeField] private Button skinsButton;
         [SerializeField] private Button optionsButton;
         [SerializeField] private Button donationsButton;
@@ -55,6 +56,7 @@ namespace ChessBalatro
         [Header("Botones Panel Modos")]
         [SerializeField] private Button classicModeButton;
         [SerializeField] private Button educationModeButton;
+        [SerializeField] private Button modesTutorialButton;
         [SerializeField] private Button arcadeModeButton;
         [SerializeField] private Button modesBackButton;
 
@@ -98,6 +100,27 @@ namespace ChessBalatro
         private readonly string[] _timeLabels = { "∞ Sin Límite", "⚡ 3 Min", "⏱ 5 Min", "⏳ 10 Min" };
         private readonly AIDifficulty[] _diffValues = { AIDifficulty.Easy, AIDifficulty.Medium, AIDifficulty.Hard };
         private readonly string[] _diffLabels = { "FÁCIL", "MEDIO", "DIFÍCIL" };
+
+        // Telemetría de rectángulos en pantalla para el Sistema de Onboarding
+        public bool IsRenderingOnGui { get; private set; } = false;
+        public Rect LastPlayButtonRect { get; private set; }
+        public Rect LastArcadeButtonRect { get; private set; }
+        public Rect LastEducationButtonRect { get; private set; }
+        public Rect LastSkinsAndOptionsRect { get; private set; }
+        public Rect LastCardSelectorRect { get; private set; }
+        public Rect LastStartMatchButtonRect { get; private set; }
+
+        public void SelectMasterCardIndex(int index)
+        {
+            if (_startingCards == null || _startingCards.Count == 0)
+            {
+                _startingCards = GameManager.GetAvailableStartingCards();
+            }
+            if (_startingCards != null && _startingCards.Count > 0)
+            {
+                _quickCardIndex = Mathf.Clamp(index, 0, _startingCards.Count - 1);
+            }
+        }
 
         // Control de transición suave
         private bool _isTransitioning = false;
@@ -150,6 +173,7 @@ namespace ChessBalatro
 
         private void Start()
         {
+            BoardView.EnsureCanvasScalersConfigured();
             _startingCards = GameManager.GetAvailableStartingCards();
             SwitchPanel(MenuPanel.Main);
             SyncSkinsUI();
@@ -204,8 +228,14 @@ namespace ChessBalatro
             if (modesButton != null)
                 modesButton.onClick.AddListener(() => StartGameWithMode(GameMode.Education));
 
+            if (tutorialButton != null)
+                tutorialButton.onClick.AddListener(() => OnboardingManager.EnsureInstance().OpenTutorialHub());
+
             if (educationModeButton != null)
                 educationModeButton.onClick.AddListener(() => StartGameWithMode(GameMode.Education));
+
+            if (modesTutorialButton != null)
+                modesTutorialButton.onClick.AddListener(() => OnboardingManager.EnsureInstance().OpenTutorialHub());
 
             if (skinsButton != null)
                 skinsButton.onClick.AddListener(() => SwitchPanel(MenuPanel.Skins));
@@ -225,7 +255,8 @@ namespace ChessBalatro
 
             if (arcadeModeButton != null)
             {
-                arcadeModeButton.interactable = false;
+                arcadeModeButton.interactable = true;
+                arcadeModeButton.onClick.AddListener(() => StartGameWithMode(GameMode.Arcade));
             }
 
             if (modesBackButton != null)
@@ -493,11 +524,13 @@ namespace ChessBalatro
 
             // Si los paneles uGUI están activos y asignados en la escena, solo pintar el fade si aplica
             bool hasUgui = (mainPanel != null && mainPanel.activeInHierarchy) ||
+                           (quickMatchSetupPanel != null && quickMatchSetupPanel.activeInHierarchy) ||
                            (modesPanel != null && modesPanel.activeInHierarchy) ||
                            (skinsPanel != null && skinsPanel.activeInHierarchy) ||
                            (optionsPanel != null && optionsPanel.activeInHierarchy) ||
                            (donationsModal != null && donationsModal.activeInHierarchy);
 
+            IsRenderingOnGui = !hasUgui;
             if (!hasUgui)
             {
                 RenderOnGuiMenu(screenW, screenH, scale);
@@ -516,12 +549,15 @@ namespace ChessBalatro
 
         private void RenderOnGuiMenu(float screenW, float screenH, float scale)
         {
-            float panelW = Mathf.Min(screenW * 0.90f, 560f);
+            float panelW = Mathf.Min(screenW * 0.92f, 580f);
+            float minTop = 104f * scale;
             float panelH = activePanel == MenuPanel.QuickMatchSetup
-                ? Mathf.Min(screenH * 0.92f, 740f)
-                : Mathf.Min(screenH * 0.82f, 620f);
+                ? Mathf.Min(screenH - minTop - (14f * scale), 785f * scale)
+                : (activePanel == MenuPanel.Main
+                    ? Mathf.Min(screenH - minTop - (16f * scale), 640f * scale)
+                    : Mathf.Min(screenH * 0.82f, 620f));
             float panelX = (screenW - panelW) * 0.5f;
-            float panelY = (screenH - panelH) * 0.5f + (28f * scale);
+            float panelY = Mathf.Max(minTop, (screenH - panelH) * 0.5f + (24f * scale));
 
             // 1. Relieve de 32-bits: Caja exterior con sombra proyectada dura y borde biselado
             Rect panelRect = new Rect(panelX, panelY, panelW, panelH);
@@ -563,52 +599,99 @@ namespace ChessBalatro
         {
             GUILayout.BeginArea(rect, _cardPanelStyle);
             {
-                GUILayout.Space(14 * scale);
+                GUILayout.Space(12 * scale);
                 GUILayout.Label("MENÚ PRINCIPAL", _panelHeaderStyle);
-                GUILayout.Space(22 * scale);
+                GUILayout.Space(16 * scale);
 
-                float btnH = Mathf.Clamp(58f * scale, 50f, 72f);
-                float spacing = Mathf.Clamp(12f * scale, 8f, 16f);
+                float overhead = 90f * scale;
+                float spacing = Mathf.Clamp(8f * scale, 5f, 12f);
+                float availH = Mathf.Max(250f, rect.height - overhead);
+                float btnH = Mathf.Clamp((availH - (spacing * 6f)) / 7.0f, 32f, 58f * scale);
 
                 // Botón 0: JUGAR (Destacado con pulso rítmico y sombra 32-bits)
                 Rect btn0Rect = GUILayoutUtility.GetRect(new GUIContent(""), _featuredButtonStyle, GUILayout.Height(btnH));
-                if (DrawArcadeButton(btn0Rect, "⚔  JUGAR  ⚔", _featuredButtonStyle, isFeatured: true, staggerDelay: 0f))
+                if (Event.current.type == EventType.Repaint && btn0Rect.width > 4f)
+                {
+                    Vector2 tl = GUIUtility.GUIToScreenPoint(btn0Rect.position);
+                    LastPlayButtonRect = new Rect(tl.x, tl.y, btn0Rect.width, btn0Rect.height);
+                }
+                if (DrawArcadeButton(btn0Rect, "⚔  JUGAR  ⚔", _featuredButtonStyle, isFeatured: true, staggerDelay: 0f, onboardingTag: "menu_play"))
                 {
                     SwitchPanel(MenuPanel.QuickMatchSetup);
+                    OnboardingManager.Instance?.NotifyMenuPlayClicked();
                 }
 
                 GUILayout.Space(spacing);
 
-                // Botón 1: MODO EDUCATIVO
+                // Botón 1: MODO ARCADE (Chess Survivors - Asedio de 15 Minutos)
+                Rect btnArcadeRect = GUILayoutUtility.GetRect(new GUIContent(""), _primaryButtonStyle, GUILayout.Height(btnH));
+                if (Event.current.type == EventType.Repaint && btnArcadeRect.width > 4f)
+                {
+                    Vector2 tlA = GUIUtility.GUIToScreenPoint(btnArcadeRect.position);
+                    LastArcadeButtonRect = new Rect(tlA.x, tlA.y, btnArcadeRect.width, btnArcadeRect.height);
+                }
+                if (DrawArcadeButton(btnArcadeRect, "⚡  MODO ARCADE (SURVIVORS)  ⚡", _primaryButtonStyle, isFeatured: false, staggerDelay: 0.03f, onboardingTag: "menu_arcade"))
+                {
+                    StartGameWithMode(GameMode.Arcade);
+                }
+
+                GUILayout.Space(spacing);
+
+                // Botón 2: MODO EDUCATIVO
                 Rect btn1Rect = GUILayoutUtility.GetRect(new GUIContent(""), _primaryButtonStyle, GUILayout.Height(btnH));
-                if (DrawArcadeButton(btn1Rect, "★  MODO EDUCATIVO  ★", _primaryButtonStyle, isFeatured: false, staggerDelay: 0.05f))
+                if (Event.current.type == EventType.Repaint && btn1Rect.width > 4f)
+                {
+                    Vector2 tlE = GUIUtility.GUIToScreenPoint(btn1Rect.position);
+                    LastEducationButtonRect = new Rect(tlE.x, tlE.y, btn1Rect.width, btn1Rect.height);
+                }
+                if (DrawArcadeButton(btn1Rect, "★  MODO EDUCATIVO  ★", _primaryButtonStyle, isFeatured: false, staggerDelay: 0.06f, onboardingTag: "menu_other"))
                 {
                     StartGameWithMode(GameMode.Education);
                 }
 
                 GUILayout.Space(spacing);
 
-                // Botón 2: ASPECTOS
+                // Botón 3: TUTORIAL DEL JUEGO (Centro de Tutoriales: Todo el Juego)
+                Rect btnTutRect = GUILayoutUtility.GetRect(new GUIContent(""), _primaryButtonStyle, GUILayout.Height(btnH));
+                if (DrawArcadeButton(btnTutRect, "🎓  TUTORIAL DEL JUEGO", _primaryButtonStyle, isFeatured: false, staggerDelay: 0.09f, onboardingTag: "menu_tutorial"))
+                {
+                    OnboardingManager.EnsureInstance().OpenTutorialHub();
+                }
+
+                GUILayout.Space(spacing);
+
+                // Botón 4: ASPECTOS
                 Rect btn2Rect = GUILayoutUtility.GetRect(new GUIContent(""), _primaryButtonStyle, GUILayout.Height(btnH));
-                if (DrawArcadeButton(btn2Rect, "ASPECTOS (SKINS)", _primaryButtonStyle, isFeatured: false, staggerDelay: 0.10f))
+                if (DrawArcadeButton(btn2Rect, "ASPECTOS (SKINS)", _primaryButtonStyle, isFeatured: false, staggerDelay: 0.12f, onboardingTag: "menu_other"))
                 {
                     SwitchPanel(MenuPanel.Skins);
                 }
 
                 GUILayout.Space(spacing);
 
-                // Botón 3: OPCIONES
+                // Botón 5: OPCIONES
                 Rect btn3Rect = GUILayoutUtility.GetRect(new GUIContent(""), _primaryButtonStyle, GUILayout.Height(btnH));
-                if (DrawArcadeButton(btn3Rect, "OPCIONES", _primaryButtonStyle, isFeatured: false, staggerDelay: 0.15f))
+                if (Event.current.type == EventType.Repaint && btn2Rect.width > 4f && btn3Rect.width > 4f)
+                {
+                    Vector2 tlS = GUIUtility.GUIToScreenPoint(btn2Rect.position);
+                    Vector2 tlO = GUIUtility.GUIToScreenPoint(btn3Rect.position);
+                    LastSkinsAndOptionsRect = Rect.MinMaxRect(
+                        Mathf.Min(tlS.x, tlO.x),
+                        Mathf.Min(tlS.y, tlO.y),
+                        Mathf.Max(tlS.x + btn2Rect.width, tlO.x + btn3Rect.width),
+                        Mathf.Max(tlS.y + btn2Rect.height, tlO.y + btn3Rect.height)
+                    );
+                }
+                if (DrawArcadeButton(btn3Rect, "OPCIONES", _primaryButtonStyle, isFeatured: false, staggerDelay: 0.16f, onboardingTag: "menu_other"))
                 {
                     SwitchPanel(MenuPanel.Options);
                 }
 
                 GUILayout.Space(spacing);
 
-                // Botón 4: DONACIONES & CRÉDITOS
-                Rect btn4Rect = GUILayoutUtility.GetRect(new GUIContent(""), _secondaryButtonStyle, GUILayout.Height(btnH * 0.9f));
-                if (DrawArcadeButton(btn4Rect, "DONACIONES & CRÉDITOS", _secondaryButtonStyle, isFeatured: false, staggerDelay: 0.20f))
+                // Botón 6: DONACIONES & CRÉDITOS
+                Rect btn4Rect = GUILayoutUtility.GetRect(new GUIContent(""), _secondaryButtonStyle, GUILayout.Height(btnH * 0.92f));
+                if (DrawArcadeButton(btn4Rect, "DONACIONES & CRÉDITOS", _secondaryButtonStyle, isFeatured: false, staggerDelay: 0.20f, onboardingTag: "menu_other"))
                 {
                     SwitchPanel(MenuPanel.Donations);
                 }
@@ -631,7 +714,7 @@ namespace ChessBalatro
                 GUILayout.BeginHorizontal();
                 {
                     Rect backTopRect = GUILayoutUtility.GetRect(new GUIContent("◄ MENÚ"), _secondaryButtonStyle, GUILayout.Width(90 * scale), GUILayout.Height(36 * scale));
-                    if (DrawArcadeButton(backTopRect, "◄ MENÚ", _secondaryButtonStyle, isFeatured: false, staggerDelay: 0f))
+                    if (DrawArcadeButton(backTopRect, "◄ MENÚ", _secondaryButtonStyle, isFeatured: false, staggerDelay: 0f, onboardingTag: "setup_other"))
                     {
                         SwitchPanel(MenuPanel.Main);
                     }
@@ -661,7 +744,7 @@ namespace ChessBalatro
                     GUIStyle whiteStyle = isWhite ? _featuredButtonStyle : _secondaryButtonStyle;
                     string whiteLabel = isWhite ? "⚪ BLANCAS (Mueves 1°) ✓" : "⚪ BLANCAS (Mueves 1°)";
                     Rect wRect = GUILayoutUtility.GetRect(new GUIContent(""), whiteStyle, GUILayout.Height(44 * scale));
-                    if (DrawArcadeButton(wRect, whiteLabel, whiteStyle, isFeatured: isWhite, staggerDelay: 0.05f))
+                    if (DrawArcadeButton(wRect, whiteLabel, whiteStyle, isFeatured: isWhite, staggerDelay: 0.05f, onboardingTag: "setup_other"))
                     {
                         _quickPlayerColor = PieceColor.White;
                     }
@@ -670,7 +753,7 @@ namespace ChessBalatro
                     GUIStyle blackStyle = isBlack ? _featuredButtonStyle : _secondaryButtonStyle;
                     string blackLabel = isBlack ? "⚫ NEGRAS (IA 1°) ✓" : "⚫ NEGRAS (IA 1°)";
                     Rect bRect = GUILayoutUtility.GetRect(new GUIContent(""), blackStyle, GUILayout.Height(44 * scale));
-                    if (DrawArcadeButton(bRect, blackLabel, blackStyle, isFeatured: isBlack, staggerDelay: 0.08f))
+                    if (DrawArcadeButton(bRect, blackLabel, blackStyle, isFeatured: isBlack, staggerDelay: 0.08f, onboardingTag: "setup_other"))
                     {
                         _quickPlayerColor = PieceColor.Black;
                     }
@@ -689,7 +772,7 @@ namespace ChessBalatro
                         GUIStyle tStyle = isSel ? _featuredButtonStyle : _secondaryButtonStyle;
                         string tLabel = isSel ? $"{_timeLabels[i]} ✓" : _timeLabels[i];
                         Rect tRect = GUILayoutUtility.GetRect(new GUIContent(""), tStyle, GUILayout.Height(40 * scale));
-                        if (DrawArcadeButton(tRect, tLabel, tStyle, isFeatured: isSel, staggerDelay: 0.10f + (i * 0.02f)))
+                        if (DrawArcadeButton(tRect, tLabel, tStyle, isFeatured: isSel, staggerDelay: 0.10f + (i * 0.02f), onboardingTag: "setup_other"))
                         {
                             _quickTimeIndex = i;
                         }
@@ -709,7 +792,7 @@ namespace ChessBalatro
                         GUIStyle dStyle = isSel ? _featuredButtonStyle : _secondaryButtonStyle;
                         string dLabel = isSel ? $"{_diffLabels[i]} ✓" : _diffLabels[i];
                         Rect dRect = GUILayoutUtility.GetRect(new GUIContent(""), dStyle, GUILayout.Height(40 * scale));
-                        if (DrawArcadeButton(dRect, dLabel, dStyle, isFeatured: isSel, staggerDelay: 0.14f + (i * 0.02f)))
+                        if (DrawArcadeButton(dRect, dLabel, dStyle, isFeatured: isSel, staggerDelay: 0.14f + (i * 0.02f), onboardingTag: "setup_other"))
                         {
                             _quickDiffIndex = i;
                         }
@@ -721,7 +804,12 @@ namespace ChessBalatro
 
                 // 5. Botones de Acción: ¡COMENZAR PARTIDA! (Pulso dorado continuo) y VOLVER AL MENÚ
                 Rect startBtnRect = GUILayoutUtility.GetRect(new GUIContent(""), _featuredButtonStyle, GUILayout.Height(62 * scale));
-                if (DrawArcadeButton(startBtnRect, "⚔  ¡COMENZAR PARTIDA!  ⚔", _featuredButtonStyle, isFeatured: true, staggerDelay: 0.18f))
+                if (Event.current.type == EventType.Repaint && startBtnRect.width > 4f)
+                {
+                    Vector2 tl = GUIUtility.GUIToScreenPoint(startBtnRect.position);
+                    LastStartMatchButtonRect = new Rect(tl.x, tl.y, startBtnRect.width, startBtnRect.height);
+                }
+                if (DrawArcadeButton(startBtnRect, "⚔  ¡COMENZAR PARTIDA!  ⚔", _featuredButtonStyle, isFeatured: true, staggerDelay: 0.18f, onboardingTag: "setup_start_match"))
                 {
                     ConfirmQuickMatchSetupAndPlay();
                 }
@@ -729,7 +817,7 @@ namespace ChessBalatro
                 GUILayout.Space(8 * scale);
 
                 Rect backBtnRect = GUILayoutUtility.GetRect(new GUIContent(""), _secondaryButtonStyle, GUILayout.Height(42 * scale));
-                if (DrawArcadeButton(backBtnRect, "← VOLVER AL MENÚ", _secondaryButtonStyle, isFeatured: false, staggerDelay: 0.22f))
+                if (DrawArcadeButton(backBtnRect, "← VOLVER AL MENÚ", _secondaryButtonStyle, isFeatured: false, staggerDelay: 0.22f, onboardingTag: "setup_other"))
                 {
                     SwitchPanel(MenuPanel.Main);
                 }
@@ -738,44 +826,61 @@ namespace ChessBalatro
         }
 
         /// <summary>
-        /// Recuadro de vista previa de carta arcade con relieve 32-bits y balanceo flotante.
+        /// Recuadro de vista previa de carta arcade con relieve 32-bits, aura personalizada por Gran Maestro y balanceo flotante.
         /// </summary>
         private void RenderCardPreviewSelector(float scale, CardData currentCard)
         {
-            float rowH = 152f * scale;
+            float rowH = 186f * scale;
             Rect rowRect = GUILayoutUtility.GetRect(0, rowH, GUILayout.ExpandWidth(true));
+            if (Event.current.type == EventType.Repaint && rowRect.width > 4f)
+            {
+                Vector2 tl = GUIUtility.GUIToScreenPoint(rowRect.position);
+                LastCardSelectorRect = new Rect(tl.x, tl.y, rowRect.width, rowRect.height);
+            }
 
-            // Caja contenedora de la carta con relieve 32-bits
-            DrawArcadeBox(rowRect, _cardPanelBgTex != null ? _cardPanelBgTex : _panelBgTex, new Color(0.20f, 0.26f, 0.36f, 1f), 2f, 3f);
+            Color auraColor = MasterCardDatabase.GetCardAuraColor(currentCard);
+            float auraPulse = 0.82f + 0.18f * Mathf.Sin(Time.time * 3.5f);
+            Color pulsingAura = new Color(auraColor.r, auraColor.g, auraColor.b, auraPulse);
 
-            // 1. Recuadro de Vista Previa de la Carta (Izquierda) con balanceo flotante (bobbing)
-            float cardPreviewW = 95f * scale;
-            float cardPreviewH = 136f * scale;
+            // Caja contenedora de la carta con relieve 32-bits teñida por el aura del Gran Maestro
+            DrawArcadeBox(rowRect, _cardPanelBgTex != null ? _cardPanelBgTex : _panelBgTex, Color.Lerp(new Color(0.24f, 0.32f, 0.44f, 1f), pulsingAura, 0.55f), 2f, 3f);
+
+            // 1. Recuadro de Vista Previa de la Carta (Izquierda) con aura brillante y balanceo flotante (bobbing)
+            float cardPreviewW = 112f * scale;
+            float cardPreviewH = 166f * scale;
             float bobY = Mathf.Sin(Time.time * 2.4f) * (3f * scale);
-            Rect cardRect = new Rect(rowRect.x + (10f * scale), rowRect.y + (7f * scale) + bobY, cardPreviewW, cardPreviewH);
+            Rect cardRect = new Rect(rowRect.x + (10f * scale), rowRect.y + (9f * scale) + bobY, cardPreviewW, cardPreviewH);
 
-            Color rarityColor = GetRarityAccentColor(currentCard != null ? currentCard.Rarity : CardRarity.Common);
-            DrawArcadeBox(cardRect, _cardFrameTex != null ? _cardFrameTex : _panelBgTex, rarityColor, 2f, 3f);
+            Color oldCol = GUI.color;
+            // Halo de aura exterior
+            GUI.color = new Color(auraColor.r, auraColor.g, auraColor.b, 0.22f * auraPulse);
+            GUI.DrawTexture(new Rect(cardRect.x - 4f, cardRect.y - 4f, cardRect.width + 8f, cardRect.height + 8f), Texture2D.whiteTexture);
+            GUI.color = oldCol;
 
-            // Coste de la carta en la esquina superior
+            DrawArcadeBox(cardRect, _cardFrameTex != null ? _cardFrameTex : _panelBgTex, pulsingAura, 2.5f, 3f);
+
+            // Coste e índice de Gran Maestro en la barra superior de la mini-carta
             float headerH = 22f * scale;
             Rect headerRect = new Rect(cardRect.x + 2, cardRect.y + 2, cardRect.width - 4, headerH);
-            Color oldCol = GUI.color;
-            GUI.color = rarityColor * 0.85f;
+            GUI.color = auraColor * 0.82f;
             GUI.DrawTexture(headerRect, Texture2D.whiteTexture);
             GUI.color = Color.white;
 
+            int totalCount = _startingCards != null ? _startingCards.Count : 0;
+            int currentIdxDisplay = totalCount > 0 ? (Mathf.Clamp(_quickCardIndex, 0, totalCount - 1) + 1) : 1;
             string costStr = currentCard != null ? $"${currentCard.Cost}" : "$1";
             if (_miniCostStyle != null)
             {
+                GUIStyle idxStyle = new GUIStyle(_miniCostStyle) { alignment = TextAnchor.MiddleLeft };
+                GUI.Label(new Rect(headerRect.x + 4, headerRect.y, headerRect.width * 0.5f, headerH), $"{currentIdxDisplay}/{Mathf.Max(1, totalCount)}", idxStyle);
                 GUI.Label(new Rect(headerRect.x, headerRect.y, headerRect.width - 4, headerH), costStr, _miniCostStyle);
             }
 
-            // Sprite de arte
-            float artW = cardPreviewW - (14f * scale);
-            float artH = 70f * scale;
-            Rect artRect = new Rect(cardRect.x + (7f * scale), cardRect.y + headerH + (4f * scale), artW, artH);
-            GUI.color = new Color(0.04f, 0.06f, 0.09f, 0.95f);
+            // Sprite de arte (con relación de aspecto preservada)
+            float artW = cardPreviewW - (12f * scale);
+            float artH = cardPreviewH - headerH - (32f * scale);
+            Rect artRect = new Rect(cardRect.x + (6f * scale), cardRect.y + headerH + (4f * scale), artW, artH);
+            GUI.color = new Color(0.04f, 0.06f, 0.09f, 0.96f);
             GUI.DrawTexture(artRect, Texture2D.whiteTexture);
             GUI.color = Color.white;
 
@@ -785,24 +890,27 @@ namespace ChessBalatro
                 DrawSpriteInGui(new Rect(artRect.x + 2, artRect.y + 2, artRect.width - 4, artRect.height - 4), cardSprite);
             }
 
-            // Etiqueta de rareza inferior
-            string rarityLabel = currentCard != null ? currentCard.Rarity.ToString().ToUpperInvariant() : "COMÚN";
+            // Etiqueta de subtítulo/habilidad en la base de la carta
+            string subtitleStr = MasterCardDatabase.GetCardSubtitle(currentCard);
+            string bottomTag = !string.IsNullOrEmpty(subtitleStr)
+                ? subtitleStr.ToUpperInvariant()
+                : (currentCard != null ? currentCard.Rarity.ToString().ToUpperInvariant() : "LEYENDA");
             Rect rarityRect = new Rect(cardRect.x + 2, cardRect.yMax - (22f * scale), cardRect.width - 4, 20f * scale);
-            GUI.color = rarityColor;
+            GUI.color = pulsingAura;
             if (_miniRarityStyle != null)
             {
-                GUI.Label(rarityRect, rarityLabel, _miniRarityStyle);
+                GUI.Label(rarityRect, bottomTag, _miniRarityStyle);
             }
             GUI.color = oldCol;
 
-            // 2. Columna de Navegación y Datos de la Carta (Derecha)
+            // 2. Columna de Navegación (< >) y Datos del Gran Maestro (Derecha)
             float rightX = cardRect.xMax + (14f * scale);
             float rightW = rowRect.xMax - rightX - (10f * scale);
             float rightY = rowRect.y + (8f * scale);
 
-            float navBtnSize = 36f * scale;
+            float navBtnSize = 38f * scale;
             Rect prevBtnRect = new Rect(rightX, rightY, navBtnSize, navBtnSize);
-            if (DrawArcadeButton(prevBtnRect, "◄", _secondaryButtonStyle, isFeatured: false, staggerDelay: 0f))
+            if (DrawArcadeButton(prevBtnRect, "◄", _secondaryButtonStyle, isFeatured: false, staggerDelay: 0f, onboardingTag: "setup_other"))
             {
                 if (_startingCards != null && _startingCards.Count > 0)
                 {
@@ -811,7 +919,7 @@ namespace ChessBalatro
             }
 
             Rect nextBtnRect = new Rect(rightX + rightW - navBtnSize, rightY, navBtnSize, navBtnSize);
-            if (DrawArcadeButton(nextBtnRect, "►", _secondaryButtonStyle, isFeatured: false, staggerDelay: 0f))
+            if (DrawArcadeButton(nextBtnRect, "►", _secondaryButtonStyle, isFeatured: false, staggerDelay: 0f, onboardingTag: "setup_other"))
             {
                 if (_startingCards != null && _startingCards.Count > 0)
                 {
@@ -824,14 +932,40 @@ namespace ChessBalatro
             string cardName = currentCard != null ? currentCard.CardName : "Carta";
             if (_cardTitleStyle != null)
             {
-                GUI.Label(nameRect, $"★ {cardName} ★", _cardTitleStyle);
+                GUIStyle dynamicTitleStyle = new GUIStyle(_cardTitleStyle)
+                {
+                    wordWrap = true,
+                    fontSize = Mathf.RoundToInt(15 * scale),
+                    normal = { textColor = pulsingAura }
+                };
+                GUI.Label(nameRect, $"★ {cardName} ★", dynamicTitleStyle);
             }
 
-            float descY = rightY + navBtnSize + (6f * scale);
-            float descH = rowH - (navBtnSize + (20f * scale));
+            float badgeY = rightY + navBtnSize + (4f * scale);
+            Rect badgeRect = new Rect(rightX, badgeY, rightW, 20f * scale);
+            string abilityLine = string.IsNullOrEmpty(subtitleStr)
+                ? $"Gran Maestro {currentIdxDisplay}/{Mathf.Max(1, totalCount)}"
+                : $"✦ {subtitleStr.ToUpperInvariant()}  •  GRAN MAESTRO ({currentIdxDisplay}/{Mathf.Max(1, totalCount)})";
+            GUI.color = pulsingAura;
+            GUIStyle abilityStyle = new GUIStyle(_miniRarityStyle)
+            {
+                fontSize = Mathf.RoundToInt(11 * scale),
+                alignment = TextAnchor.MiddleLeft,
+                normal = { textColor = Color.white }
+            };
+            GUI.Label(badgeRect, abilityLine, abilityStyle);
+            GUI.color = oldCol;
+
+            float descY = badgeY + (22f * scale);
+            float descH = rowRect.yMax - descY - (8f * scale);
             Rect descRect = new Rect(rightX, descY, rightW, descH);
             string cardDesc = currentCard != null ? currentCard.Description : "";
-            GUI.Label(descRect, cardDesc, _labelStyle);
+            GUIStyle descStyle = new GUIStyle(_labelStyle)
+            {
+                fontSize = Mathf.RoundToInt(14 * scale),
+                alignment = TextAnchor.UpperLeft
+            };
+            GUI.Label(descRect, cardDesc, descStyle);
         }
 
         #region Helpers de Renderizado Arcade 32-Bits
@@ -872,7 +1006,7 @@ namespace ChessBalatro
         /// <summary>
         /// Dibuja un botón interactivo con sombra dura, elevación de 2px en hover, pulso en featured y entrada escalonada.
         /// </summary>
-        private bool DrawArcadeButton(Rect rect, string text, GUIStyle style, bool isFeatured = false, float staggerDelay = 0f)
+        private bool DrawArcadeButton(Rect rect, string text, GUIStyle style, bool isFeatured = false, float staggerDelay = 0f, string onboardingTag = null)
         {
             float scale = ChessFontProvider.GetResponsiveScale();
             float elapsed = Time.realtimeSinceStartup - _panelEntranceStartTime;
@@ -906,7 +1040,8 @@ namespace ChessBalatro
             GUI.DrawTexture(shadowRect, Texture2D.whiteTexture);
 
             GUI.color = new Color(1f, 1f, 1f, t);
-            bool clicked = GUI.Button(rect, text, style);
+            bool allowed = string.IsNullOrEmpty(onboardingTag) || OnboardingManager.IsImGuiButtonAllowed(onboardingTag);
+            bool clicked = GUI.Button(rect, text, style) && allowed;
 
             // Borde duro iluminado en Hover
             if (isHovered && t >= 0.85f)
@@ -925,7 +1060,8 @@ namespace ChessBalatro
         private Sprite GetCardPreviewSprite(CardData card)
         {
             if (card == null) return null;
-            if (card.CardSprite != null) return card.CardSprite;
+            Sprite masterSpr = MasterCardDatabase.ResolveSprite(card);
+            if (masterSpr != null) return masterSpr;
 
             // Fallback a sprites de fichas del tema activo
             string name = card.CardName.ToLowerInvariant();
@@ -935,12 +1071,6 @@ namespace ChessBalatro
             else if (name.Contains("alfil")) type = PieceType.Bishop;
             else if (name.Contains("torre")) type = PieceType.Rook;
             else if (name.Contains("dama") || name.Contains("reina")) type = PieceType.Queen;
-
-            if (name.Contains("petrosián") || name.Contains("petrosian") || name.Contains("tigrán") || name.Contains("tigran"))
-            {
-                Sprite petro = PetrosianCardData.LoadPetrosianSprite();
-                if (petro != null) return petro;
-            }
 
             if (PieceSkinManager.Instance != null && PieceSkinManager.Instance.ActiveTheme != null)
             {
@@ -986,7 +1116,21 @@ namespace ChessBalatro
                 tr.height / sprite.texture.height
             );
 
-            GUI.DrawTextureWithTexCoords(screenRect, sprite.texture, uv, true);
+            float spriteAspect = tr.width / Mathf.Max(1f, tr.height);
+            float rectAspect = screenRect.width / Mathf.Max(1f, screenRect.height);
+            Rect drawRect = screenRect;
+            if (spriteAspect > rectAspect)
+            {
+                float h = screenRect.width / spriteAspect;
+                drawRect = new Rect(screenRect.x, screenRect.y + (screenRect.height - h) * 0.5f, screenRect.width, h);
+            }
+            else
+            {
+                float w = screenRect.height * spriteAspect;
+                drawRect = new Rect(screenRect.x + (screenRect.width - w) * 0.5f, screenRect.y, w, screenRect.height);
+            }
+
+            GUI.DrawTextureWithTexCoords(drawRect, sprite.texture, uv, true);
         }
 
         private static Color GetRarityAccentColor(CardRarity rarity)
@@ -1018,6 +1162,15 @@ namespace ChessBalatro
             GameManager.CurrentMatchConfig.startingCard = (_startingCards != null && _quickCardIndex >= 0 && _quickCardIndex < _startingCards.Count)
                 ? _startingCards[_quickCardIndex]
                 : null;
+            if (GameManager.CurrentMatchConfig.startingCard != null)
+            {
+                GameManager.CurrentMatchConfig.startingCard.hideFlags |= HideFlags.DontUnloadUnusedAsset;
+                GameManager.CurrentMatchConfig.startingMasterName = GameManager.CurrentMatchConfig.startingCard.CardName;
+            }
+            else
+            {
+                GameManager.CurrentMatchConfig.startingMasterName = null;
+            }
 
             GameManager.CurrentMatchConfig.playerColor = _quickPlayerColor;
             GameManager.CurrentMatchConfig.timeLimitSeconds = _timeValues[Mathf.Clamp(_quickTimeIndex, 0, _timeValues.Length - 1)];
@@ -1025,6 +1178,7 @@ namespace ChessBalatro
 
             Debug.Log($"<color=green><b>[MainMenuManager] Configuración de partida confirmada: Carta={GameManager.CurrentMatchConfig.startingCard?.CardName}, Bando={GameManager.CurrentMatchConfig.playerColor}, Tiempo={GameManager.CurrentMatchConfig.timeLimitSeconds}s, IA={GameManager.CurrentMatchConfig.aiDifficulty}</b></color>");
 
+            OnboardingManager.Instance?.NotifyQuickMatchStartClicked();
             StartGameWithMode(GameMode.ClassicRoguelike);
         }
 
@@ -1032,36 +1186,47 @@ namespace ChessBalatro
         {
             GUILayout.BeginArea(rect, _cardPanelStyle);
             {
-                GUILayout.Space(30 * scale);
-                GUILayout.Label("SELECCIÓN DE MODO", _titleStyle);
-                GUILayout.Space(30 * scale);
+                GUILayout.Space(16 * scale);
+                GUILayout.Label("SELECCIÓN DE MODO", _panelHeaderStyle);
+                GUILayout.Space(16 * scale);
 
-                float btnH = 90f * scale;
+                float gap = Mathf.Clamp(12f * scale, 8f, 18f);
+                float availH = Mathf.Max(260f, rect.height - (110f * scale));
+                float btnH = Mathf.Clamp((availH - gap * 4f) / 5.1f, 44f, 82f * scale);
 
                 // Modo Clásico / Roguelike
-                if (GUILayout.Button("MODO CLÁSICO / ROGUELIKE\n<size=15>Barajas de cartas, reliquias y Grandes Maestros</size>", _primaryButtonStyle, GUILayout.Height(btnH * 1.2f)))
+                if (GUILayout.Button("MODO CLÁSICO / ROGUELIKE\n<size=14>Barajas de cartas, reliquias y Grandes Maestros</size>", _primaryButtonStyle, GUILayout.Height(btnH * 1.05f)))
                 {
                     StartGameWithMode(GameMode.ClassicRoguelike);
                 }
 
-                GUILayout.Space(25 * scale);
+                GUILayout.Space(gap);
 
                 // Modo Educativo (Destacado)
-                if (GUILayout.Button("★  MODO EDUCATIVO (APRENDE DESDE CERO)  ★\n<size=15>5 lecciones interactivas: Torre, Alfil, Caballo, Peón, Dama y Petrosián</size>", _featuredButtonStyle, GUILayout.Height(btnH * 1.35f)))
+                if (GUILayout.Button("★  MODO EDUCATIVO (APRENDE DESDE CERO)  ★\n<size=14>Lecciones interactivas: Torre, Alfil, Caballo, Peón, Dama y Petrosián</size>", _featuredButtonStyle, GUILayout.Height(btnH * 1.12f)))
                 {
                     StartGameWithMode(GameMode.Education);
                 }
 
-                GUILayout.Space(25 * scale);
+                GUILayout.Space(gap);
 
-                // Modo Arcade (Próximamente)
-                GUI.enabled = false;
-                GUILayout.Button("MODO ARCADE\n<size=15>[Próximamente en la próxima actualización]</size>", _disabledButtonStyle, GUILayout.Height(btnH * 1.1f));
-                GUI.enabled = true;
+                // Tutorial Completo del Juego (Centro de Tutoriales: Todo el Juego)
+                if (GUILayout.Button("🎓  TUTORIAL DEL JUEGO\n<size=14>Guías de TODO: Clásico, Arcade Survivors, Academia, Maestros y Cartas</size>", _primaryButtonStyle, GUILayout.Height(btnH * 1.05f)))
+                {
+                    OnboardingManager.EnsureInstance().OpenTutorialHub();
+                }
 
-                GUILayout.Space(40 * scale);
+                GUILayout.Space(gap);
 
-                if (GUILayout.Button("◄ VOLVER", _secondaryButtonStyle, GUILayout.Height(75 * scale)))
+                // Modo Arcade (Chess Survivors - Asedio de 15 Minutos)
+                if (GUILayout.Button("⚡  MODO ARCADE (ASEDIO 15 MIN)  ⚡\n<size=14>Tablero 8×8→8×20 · Captura en 1 movimiento, Aliados, Sinergias y Coloso Real</size>", _featuredButtonStyle, GUILayout.Height(btnH * 1.02f)))
+                {
+                    StartGameWithMode(GameMode.Arcade);
+                }
+
+                GUILayout.Space(gap * 1.2f);
+
+                if (GUILayout.Button("◄ VOLVER", _secondaryButtonStyle, GUILayout.Height(btnH * 0.85f)))
                 {
                     SwitchPanel(MenuPanel.Main);
                 }

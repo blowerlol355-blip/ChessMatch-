@@ -21,6 +21,30 @@ namespace ChessBalatro
         [SerializeField] private bool showOnScreenHUD = true;
         [SerializeField] private bool showAnimatedBanner = true;
         [SerializeField] private bool moveHistoryCollapsed = false;
+        [SerializeField] private bool showMoveHistory = true;
+
+        public bool ShowOnScreenHUD
+        {
+            get => showOnScreenHUD;
+            set => showOnScreenHUD = value;
+        }
+
+        public bool ShowMoveHistory
+        {
+            get => showMoveHistory;
+            set => showMoveHistory = value;
+        }
+
+        public bool MoveHistoryCollapsed
+        {
+            get => moveHistoryCollapsed;
+            set => moveHistoryCollapsed = value;
+        }
+
+        public void SetMoveHistoryVisible(bool visible)
+        {
+            showMoveHistory = visible;
+        }
 
         [Header("Opcional: Enlaces a Canvas / uGUI")]
         [SerializeField] private CanvasGroup alertCanvasGroup;
@@ -76,6 +100,9 @@ namespace ChessBalatro
             TrySubscribe();
             PetrosianDefenseEffect.OnShieldActivated   += HandlePetrosianShieldActivated;
             PetrosianDefenseEffect.OnShieldDeactivated += HandlePetrosianShieldDeactivated;
+            MikhailTalEffect.OnSacrificeExecuted       += HandleTalSacrificeExecuted;
+            JuditPolgarEffect.OnRelentlessAttackActivated += HandlePolgarActivated;
+            GarryKasparovEffect.OnIntimidationApplied  += HandleKasparovIntimidationApplied;
         }
 
         private void Start()
@@ -99,6 +126,9 @@ namespace ChessBalatro
             Unsubscribe();
             PetrosianDefenseEffect.OnShieldActivated   -= HandlePetrosianShieldActivated;
             PetrosianDefenseEffect.OnShieldDeactivated -= HandlePetrosianShieldDeactivated;
+            MikhailTalEffect.OnSacrificeExecuted       -= HandleTalSacrificeExecuted;
+            JuditPolgarEffect.OnRelentlessAttackActivated -= HandlePolgarActivated;
+            GarryKasparovEffect.OnIntimidationApplied  -= HandleKasparovIntimidationApplied;
         }
 
         private void OnDestroy()
@@ -163,9 +193,7 @@ namespace ChessBalatro
         private void HandleGameInitialized(BoardState state)
         {
             _turnEntries.Clear();
-            _isBannerActive = false;
-            _bannerIsPersistent = false;
-            if (_bannerCoroutine != null) StopCoroutine(_bannerCoroutine);
+            ClearBanner();
 
             if (state?.History != null)
             {
@@ -231,16 +259,16 @@ namespace ChessBalatro
         private void HandleCheck(PieceColor checkedColor)
         {
             // Si el escudo de Petrosían está activo, suprimir la alerta de jaque normal
-            if (_petrosianShieldActive && checkedColor == PieceColor.White)
+            if (_petrosianShieldActive && checkedColor == PetrosianDefenseEffect.ProtectedColor)
             {
-                Debug.Log("<color=#FFD700>[GameHUDView] Jaque al Rey Blanco ANULADO por el Escudo de Petrosían.</color>");
+                Debug.Log("<color=#FFD700>[GameHUDView] Jaque ANULADO por el Escudo de Petrosián.</color>");
                 return;
             }
 
             string colorName = checkedColor == PieceColor.White ? "REY BLANCO" : "REY NEGRO";
             Color alertCol = new Color(1.0f, 0.40f, 0.20f); // Ámbar/Naranja brillante
 
-            TriggerBanner("¡JAQUE!", $"El {colorName} se encuentra bajo ataque directo", alertCol, isPersistent: false, displayTime: 2.2f);
+            TriggerBanner("¡JAQUE!", $"El {colorName} se encuentra bajo ataque directo", alertCol, isPersistent: false, displayTime: 3.0f);
         }
 
         private void HandleCheckmate(PieceColor matedColor)
@@ -248,7 +276,7 @@ namespace ChessBalatro
             string winner = matedColor == PieceColor.White ? "NEGRAS" : "BLANCAS";
             Color mateCol = new Color(0.95f, 0.15f, 0.20f); // Rojo carmesí
 
-            TriggerBanner("¡JAQUE MATE!", $"Victoria definitiva de las {winner}", mateCol, isPersistent: true);
+            TriggerBanner("¡JAQUE MATE!", $"Victoria definitiva de las {winner}", mateCol, isPersistent: false, displayTime: 3.0f);
         }
 
         private void HandleStalemate(PieceColor stalematedColor)
@@ -256,7 +284,7 @@ namespace ChessBalatro
             string side = stalematedColor == PieceColor.White ? "Blancas" : "Negras";
             Color staleCol = new Color(0.30f, 0.85f, 0.95f); // Celeste
 
-            TriggerBanner("¡REY AHOGADO!", $"Empate por tablas: las {side} no tienen movimientos legales", staleCol, isPersistent: true);
+            TriggerBanner("¡REY AHOGADO!", $"Empate por tablas: las {side} no tienen movimientos legales", staleCol, isPersistent: false, displayTime: 3.0f);
         }
 
         private void RebuildHistoryFromRecords(IReadOnlyList<MoveRecord> records)
@@ -309,7 +337,7 @@ namespace ChessBalatro
             Color shieldGold = new Color(1f, 0.85f, 0.2f);   // dorado/neón Petrosían
             TriggerBanner(
                 title:       "¡JAQUE ANULADO!",
-                subtitle:    "Escudo de Petrosían activo — El Rey Blanco está protegido este turno",
+                subtitle:    "Escudo de Petrosían activo — Tu Rey está protegido este turno",
                 color:       shieldGold,
                 isPersistent: false,
                 displayTime:  3.5f
@@ -324,14 +352,68 @@ namespace ChessBalatro
             Debug.Log("<color=#FFD700>[GameHUDView] Escudo de Petrosían desactivado.</color>");
         }
 
+        private void HandleTalSacrificeExecuted(BoardCoord coord, List<BoardCoord> immobilized)
+        {
+            string frozenText = immobilized != null && immobilized.Count > 0
+                ? $" e inmoviliza {immobilized.Count} rival(es)"
+                : "";
+            TriggerBanner(
+                title: "¡BOSQUE OSCURO!",
+                subtitle: $"Sacrificio en {coord.ToAlgebraic()} — ¡2 turnos consecutivos{frozenText}!",
+                color: MasterCardDatabase.TalAuraColor,
+                isPersistent: false,
+                displayTime: 3.0f
+            );
+        }
+
+        private void HandlePolgarActivated(PieceColor color)
+        {
+            TriggerBanner(
+                title: "¡ATAQUE IMPLACABLE!",
+                subtitle: "Alfiles y Dama saltan 1 pieza (+3 PTS si das Jaque)",
+                color: MasterCardDatabase.PolgarAuraColor,
+                isPersistent: false,
+                displayTime: 2.8f
+            );
+        }
+
+        private void HandleKasparovIntimidationApplied(PieceColor intimidatedColor)
+        {
+            TriggerBanner(
+                title: "¡PRESIÓN ABSOLUTA!",
+                subtitle: "Caballos/Alfiles +1 ortogonal • Intimidación sobre Dama/Torre IA",
+                color: MasterCardDatabase.KasparovAuraColor,
+                isPersistent: false,
+                displayTime: 3.0f
+            );
+        }
+
         #endregion
 
-        #region Animación del Banner ("¡JAQUE!" / "¡JAQUE MATE!")
+        #region Animación del Banner ("¡JAQUE!" / "¡JAQUE MATE!" / "¡REY AHOGADO!")
 
         /// <summary>
-        /// Activa la animación del banner de alerta con interpolación suave de escala y desvanecimiento de alfa.
+        /// Cancela y oculta inmediatamente cualquier banner o anuncio activo en pantalla (útil al cambiar de lección).
         /// </summary>
-        public void TriggerBanner(string title, string subtitle, Color color, bool isPersistent = false, float displayTime = 2.2f)
+        public void ClearBanner()
+        {
+            if (_bannerCoroutine != null)
+            {
+                StopCoroutine(_bannerCoroutine);
+                _bannerCoroutine = null;
+            }
+
+            _isBannerActive = false;
+            _bannerIsPersistent = false;
+            _bannerAlpha = 0f;
+            _bannerScale = 1f;
+            UpdateCanvasBanner(0f);
+        }
+
+        /// <summary>
+        /// Activa la animación del banner de alerta con interpolación suave de escala y desvanecimiento de alfa tras 3 segundos.
+        /// </summary>
+        public void TriggerBanner(string title, string subtitle, Color color, bool isPersistent = false, float displayTime = 3.0f)
         {
             if (!showAnimatedBanner) return;
 
@@ -516,15 +598,25 @@ namespace ChessBalatro
 
         private void OnGUI()
         {
-            if (!showOnScreenHUD) return;
+            if (!showOnScreenHUD || GameManager.SelectedGameMode == GameMode.Arcade || ArcadeSurvivorController.IsArcadeModeActive) return;
 
             InitStylesIfNeeded();
 
-            // 1. Dibujar Reloj de Ajedrez si hay límite de tiempo configurado
-            DrawChessClock();
+            bool inEduMode = TutorialController.IsEducationalModeActive;
+            bool inOnboarding = OnboardingManager.IsOnboardingGameplayActive;
+            bool hideMatchWidgets = inEduMode || inOnboarding;
 
-            // 2. Dibujar Panel de Historial de Jugadas en Notación Algebraica (Lateral Izquierdo)
-            DrawMoveHistoryPanel();
+            // 1. Dibujar Reloj de Ajedrez si hay límite de tiempo configurado (oculto en Modo Educativo / Onboarding)
+            if (!hideMatchWidgets)
+            {
+                DrawChessClock();
+            }
+
+            // 2. Dibujar Panel de Historial de Jugadas en Notación Algebraica (oculto en Modo Educativo / Onboarding)
+            if (showMoveHistory && !hideMatchWidgets)
+            {
+                DrawMoveHistoryPanel();
+            }
 
             // 3. Dibujar Banner Animado ("¡JAQUE!" o "¡JAQUE MATE!") Flotante en Pantalla
             if (_isBannerActive && _bannerAlpha > 0.01f)
@@ -533,10 +625,57 @@ namespace ChessBalatro
             }
 
             // 4. Dibujar Indicador de Carta Activa / En Uso con botón para Deshacer
-            DrawActiveCardIndicator();
+            DrawActiveCardIndicator(inEduMode);
+
+            // 5. Dibujar Estados Activos de Grandes Maestros (Turno Extra / Intimidación)
+            if (!hideMatchWidgets)
+            {
+                DrawMasterStatusBadges();
+            }
         }
 
-        private void DrawActiveCardIndicator()
+        private void DrawMasterStatusBadges()
+        {
+            BoardState state = boardView != null ? boardView.BoardState : null;
+            if (state == null) return;
+
+            bool hasExtra = state.PendingExtraTurns > 0;
+            bool hasIntim = state.IntimidatedTurnsRemaining > 0;
+            if (!hasExtra && !hasIntim) return;
+
+            float scale = ChessFontProvider.GetResponsiveScale();
+            float safeLeft = Mathf.Max(0f, Screen.safeArea.xMin);
+            float safeTop = Mathf.Max(0f, Screen.height - Screen.safeArea.yMax);
+            float badgeX = safeLeft + 14f;
+            float badgeY = safeTop + 68f;
+            float badgeH = 26f * scale;
+            float badgeW = Mathf.Min(310f * scale, Screen.width * 0.56f);
+
+            Color oldCol = GUI.color;
+
+            if (hasExtra)
+            {
+                Rect r = new Rect(badgeX, badgeY, badgeW, badgeH);
+                GUI.color = new Color(0.12f, 0.06f, 0.20f, 0.92f);
+                GUI.DrawTexture(r, Texture2D.whiteTexture);
+                GUI.color = MasterCardDatabase.TalAuraColor;
+                GUI.Label(r, $" ⚡ BOSQUE OSCURO: +{state.PendingExtraTurns} TURNO EXTRA", _badgeStyle);
+                badgeY += badgeH + 6f;
+            }
+
+            if (hasIntim)
+            {
+                Rect r = new Rect(badgeX, badgeY, badgeW, badgeH);
+                GUI.color = new Color(0.22f, 0.06f, 0.08f, 0.92f);
+                GUI.DrawTexture(r, Texture2D.whiteTexture);
+                GUI.color = MasterCardDatabase.KasparovAuraColor;
+                GUI.Label(r, " ☠ INTIMIDACIÓN: IA SIN DAMA/TORRE", _badgeStyle);
+            }
+
+            GUI.color = oldCol;
+        }
+
+        private void DrawActiveCardIndicator(bool inEduMode)
         {
             CardManager cm = CardManager.Instance;
             if (cm == null) cm = FindAnyObjectByType<CardManager>();
@@ -545,11 +684,34 @@ namespace ChessBalatro
             CardView activeCard = cm.ActiveCardViews[0];
             if (activeCard == null || activeCard.CardData == null) return;
 
+            bool awaitingTalSacrifice = cm.TryGetAwaitingTalEffect(out _);
+            Color auraColor = MasterCardDatabase.GetCardAuraColor(activeCard.CardData);
+
+            float safeBottom = Mathf.Max(0f, Screen.safeArea.yMin);
             float screenW = Screen.width;
-            float pillW = Mathf.Min(screenW * 0.85f, 440f);
-            float pillH = 48f;
+            float pillW = Mathf.Min(screenW * 0.90f, awaitingTalSacrifice ? 520f : 440f);
+            float pillH = awaitingTalSacrifice ? 54f : 48f;
             float pillX = (screenW - pillW) * 0.5f;
-            float pillY = Screen.height - 65f; // Ubicado en la parte inferior para fácil acceso táctil con una sola mano
+            float pillY;
+            if (inEduMode)
+            {
+                float navTopY = (TutorialUI.Instance != null && TutorialUI.Instance.ActiveNavBarTopY > 0f)
+                    ? TutorialUI.Instance.ActiveNavBarTopY
+                    : (Screen.height - safeBottom - 110f);
+                pillY = Mathf.Max(16f, navTopY - pillH - 10f);
+            }
+            else
+            {
+                float scale = Mathf.Min(Screen.width / 1080f, Screen.height / 1920f);
+                if (scale < 0.65f) scale = 0.85f;
+                float histRight = showMoveHistory ? ((16f * scale) + Mathf.Min(250f * scale, screenW * 0.38f) + 12f) : 16f;
+                if (pillX < histRight)
+                {
+                    pillX = histRight;
+                    pillW = Mathf.Max(220f, screenW - pillX - 16f);
+                }
+                pillY = Screen.height - 65f - safeBottom; // Ubicado en la parte inferior para fácil acceso táctil con una sola mano
+            }
 
             Rect pillRect = new Rect(pillX, pillY, pillW, pillH);
 
@@ -562,9 +724,9 @@ namespace ChessBalatro
             GUI.color = new Color(0.10f, 0.12f, 0.18f, 0.96f);
             GUI.DrawTexture(pillRect, Texture2D.whiteTexture);
 
-            // Borde dorado neón con pulso sutil
+            // Borde del color de aura de la carta con pulso sutil
             float pulse = 0.8f + 0.2f * Mathf.Sin(Time.time * 5f);
-            GUI.color = new Color(0.96f * pulse, 0.86f * pulse, 0.38f, 1f);
+            GUI.color = new Color(auraColor.r * pulse, auraColor.g * pulse, auraColor.b * pulse, 1f);
             GUI.DrawTexture(new Rect(pillRect.x, pillRect.y, pillRect.width, 2), Texture2D.whiteTexture);
             GUI.DrawTexture(new Rect(pillRect.x, pillRect.yMax - 2, pillRect.width, 2), Texture2D.whiteTexture);
             GUI.DrawTexture(new Rect(pillRect.x, pillRect.y, 2, pillRect.height), Texture2D.whiteTexture);
@@ -576,11 +738,14 @@ namespace ChessBalatro
             GUIStyle pillLabelStyle = new GUIStyle(_headerStyle)
             {
                 font = ChessFontProvider.SerifBold,
-                fontSize = 14,
+                fontSize = awaitingTalSacrifice ? 12 : 14,
+                wordWrap = true,
                 alignment = TextAnchor.MiddleLeft
             };
-            string cardName = activeCard.CardData.CardName.ToUpperInvariant();
-            GUI.Label(new Rect(pillRect.x + 14, pillRect.y, labelW, pillH), $"⚡ <color=#FFE566><b>ACTIVA:</b></color> {cardName}", pillLabelStyle);
+            string pillText = awaitingTalSacrifice
+                ? "☠ <color=#E088FF><b>BOSQUE OSCURO:</b></color> Toca Caballo, Alfil, Torre o Dama aliado para sacrificar"
+                : $"⚡ <color=#FFE566><b>ACTIVA:</b></color> {activeCard.CardData.CardName.ToUpperInvariant()}";
+            GUI.Label(new Rect(pillRect.x + 14, pillRect.y, labelW, pillH), pillText, pillLabelStyle);
 
             // Botón Deshacer / Cancelar
             float btnW = 92f;
@@ -600,7 +765,7 @@ namespace ChessBalatro
             GUI.DrawTexture(cancelBtnRect, Texture2D.whiteTexture);
             GUI.color = Color.white;
 
-            if (GUI.Button(cancelBtnRect, "✕ CANCELAR", cancelBtnStyle))
+            if (!OnboardingManager.IsOnboardingActive && GUI.Button(cancelBtnRect, "✕ CANCELAR", cancelBtnStyle))
             {
                 cm.DeactivateCard(activeCard);
             }
@@ -654,8 +819,10 @@ namespace ChessBalatro
             float collapsedHeight = 36f * scale;
 
             float panelHeight = moveHistoryCollapsed ? collapsedHeight : expandedHeight;
-            float posX = 16f * scale;
-            float posY = screenH - panelHeight - (16f * scale); // Anclado firmemente en la esquina inferior izquierda
+            float safeLeft = Mathf.Max(0f, Screen.safeArea.xMin);
+            float safeBottom = Mathf.Max(0f, Screen.safeArea.yMin);
+            float posX = safeLeft + (16f * scale);
+            float posY = screenH - safeBottom - panelHeight - (16f * scale); // Anclado firmemente en la esquina inferior izquierda
 
             Rect panelRect = new Rect(posX, posY, panelWidth, panelHeight);
 

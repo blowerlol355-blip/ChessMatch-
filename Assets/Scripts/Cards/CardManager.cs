@@ -68,7 +68,11 @@ namespace ChessBalatro
             SubscribeToTurnEvents();
             EnsureCanvasAndHandView();
 
-            if (autoSpawnTestCardsOnStart)
+            if (autoSpawnTestCardsOnStart &&
+                GameManager.SelectedGameMode != GameMode.Education &&
+                GameManager.SelectedGameMode != GameMode.Arcade &&
+                !TutorialController.IsEducationalModeActive &&
+                !OnboardingManager.IsOnboardingGameplayActive)
             {
                 SetupInitialHand();
             }
@@ -136,14 +140,22 @@ namespace ChessBalatro
         /// <summary>
         /// Instancia o asigna el Canvas y el contenedor de mano CardHandView si no existen.
         /// </summary>
-        private void EnsureCanvasAndHandView()
+        public void EnsureCanvasAndHandView()
         {
             EnsureEventSystem();
 
-            if (handView != null) return;
+            if (handView != null)
+            {
+                BoardView.EnsureCanvasScalersConfigured();
+                return;
+            }
 
             handView = FindAnyObjectByType<CardHandView>();
-            if (handView != null) return;
+            if (handView != null)
+            {
+                BoardView.EnsureCanvasScalersConfigured();
+                return;
+            }
 
             if (targetCanvas == null)
             {
@@ -161,18 +173,21 @@ namespace ChessBalatro
                 targetCanvas.sortingOrder = 50; // Capa superior para garantizar visibilidad sobre el tablero
                 CanvasScaler scaler = canvasObj.AddComponent<CanvasScaler>();
                 scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-                scaler.referenceResolution = new Vector2(1080, 1920);
+                scaler.referenceResolution = new Vector2(1080f, 1920f);
+                scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
                 scaler.matchWidthOrHeight = 0.5f;
                 canvasObj.AddComponent<GraphicRaycaster>();
             }
             else
             {
-                // Si ya existe un Canvas, garantizar que el sorting order sea suficiente para renderizarse
+                // Si ya existe un Canvas, garantizar que el sorting order y CanvasScaler sean correctos
                 if (targetCanvas.sortingOrder < 30)
                 {
                     targetCanvas.sortingOrder = 30;
                 }
             }
+
+            BoardView.EnsureCanvasScalersConfigured();
 
             GameObject handObj = new GameObject("CardHandContainer");
             handObj.transform.SetParent(targetCanvas.transform, false);
@@ -210,11 +225,15 @@ namespace ChessBalatro
             CardData masterCard = GameManager.Instance != null ? GameManager.Instance.ActiveMasterCard : null;
             if (masterCard == null)
             {
-                masterCard = PetrosianCardData.CreateRuntimeInstance();
+                masterCard = MasterCardDatabase.CreatePetrosianCard();
                 if (GameManager.Instance != null)
                 {
                     GameManager.Instance.ActiveMasterCard = masterCard;
                 }
+            }
+            else if (masterCard.CardSprite == null)
+            {
+                masterCard.CardSprite = MasterCardDatabase.ResolveSprite(masterCard);
             }
             handView.AddCardToHand(masterCard, this);
 
@@ -275,6 +294,12 @@ namespace ChessBalatro
             if (cardView == null || cardView.CardData == null) return false;
             CardData data = cardView.CardData;
 
+            if (TryGetAwaitingTalEffect(out _))
+            {
+                Debug.LogWarning("<color=orange>[CardManager] Completa o cancela la selección de sacrificio de Bosque Oscuro antes de activar otra carta.</color>");
+                return false;
+            }
+
             // Requisito 4: Validar coste disponible
             if (playerEnergy < data.Cost)
             {
@@ -330,6 +355,7 @@ namespace ChessBalatro
             }
 
             OnCardActivated?.Invoke(cardView);
+            RetroAudioManager.Instance?.PlayCardActivate();
             Debug.Log($"<color=lime><b>[CardManager]</b> Carta activada: <b>{data.CardName}</b> (Coste: ${data.Cost}, Energía restante: ${playerEnergy}). Movimientos actualizados.</color>");
             return true;
         }
@@ -352,6 +378,11 @@ namespace ChessBalatro
             // Limpiar efecto del tablero
             if (effect != null)
             {
+                if (effect is GarryKasparovEffect kasparov)
+                {
+                    kasparov.CancelPendingIntimidation(board);
+                }
+
                 effect.ResetEffect();
                 if (board != null)
                 {
@@ -379,6 +410,63 @@ namespace ChessBalatro
 
             OnCardDeactivated?.Invoke(cardView);
             Debug.Log($"<color=yellow>[CardManager] Carta desactivada: <b>{data.CardName}</b>. Coste reembolsado (${playerEnergy}).</color>");
+        }
+
+        public bool TryGetAwaitingTalEffect(out MikhailTalEffect waitingEffect)
+        {
+            for (int i = 0; i < _activeEffects.Count; i++)
+            {
+                if (_activeEffects[i] is MikhailTalEffect tal && tal.IsAwaitingSacrificeTarget)
+                {
+                    waitingEffect = tal;
+                    return true;
+                }
+            }
+            waitingEffect = null;
+            return false;
+        }
+
+        /// <summary>
+        /// Consume definitivamente una carta cuyo efecto inmediato (como el sacrificio de Mijaíl Tal)
+        /// acaba de ejecutarse sobre el tablero.
+        /// </summary>
+        public void ConsumeImmediateEffectCard(ICardEffect targetEffect)
+        {
+            if (targetEffect == null) return;
+
+            BoardState board = boardView != null ? boardView.BoardState : null;
+            if (board != null)
+            {
+                board.ActiveCardEffects.Remove(targetEffect);
+                if (targetEffect is IMoveModifier modifier)
+                {
+                    board.Modifiers.Remove(modifier);
+                }
+            }
+
+            _activeEffects.Remove(targetEffect);
+
+            for (int i = _activeCardViews.Count - 1; i >= 0; i--)
+            {
+                CardView cv = _activeCardViews[i];
+                if (cv != null && cv.Effect == targetEffect)
+                {
+                    _activeCardViews.RemoveAt(i);
+                    cv.SetActivated(false);
+                    cv.PlayDestroyBurnoutAnimation();
+                    if (handView != null)
+                    {
+                        handView.RemoveCardFromHand(cv);
+                    }
+                }
+            }
+
+            if (inputHandler != null)
+            {
+                inputHandler.RefreshLegalMoves();
+            }
+
+            OnTurnEffectsCleared?.Invoke();
         }
 
         /// <summary>

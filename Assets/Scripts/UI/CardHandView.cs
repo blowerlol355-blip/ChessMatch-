@@ -80,6 +80,17 @@ namespace ChessBalatro
             }
         }
 
+        public float RightOffset => rightOffset;
+        public float BottomOffset => bottomOffset;
+
+        public void SetBottomOffset(float bottom)
+        {
+            if (Mathf.Approximately(bottomOffset, bottom)) return;
+            bottomOffset = bottom;
+            ConfigureHandContainerRect();
+            ReorganizeHand();
+        }
+
         public Vector2 CardDimensions
         {
             get => cardDimensions;

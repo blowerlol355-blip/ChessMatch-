@@ -44,6 +44,7 @@ namespace ChessBalatro
 
         /// <summary>
         /// Obtiene el objeto de jugada completo (Move) con metadatos de coronación, captura y enroque.
+        /// Respeta el estado "Intimidación" (Garry Kaspárov), prohibiendo mover la pieza de mayor valor (Queen o Rook).
         /// </summary>
         public static Move GetBestMoveObject(BoardState board, PieceColor aiColor, AIDifficulty difficulty)
         {
@@ -52,6 +53,8 @@ namespace ChessBalatro
             List<Move> legalMoves = MoveValidator.GetAllLegalMoves(board, aiColor);
             if (legalMoves == null || legalMoves.Count == 0) return null;
 
+            legalMoves = FilterMovesForIntimidation(board, aiColor, legalMoves);
+
             return difficulty switch
             {
                 AIDifficulty.Easy => SelectEasyMove(legalMoves),
@@ -59,6 +62,44 @@ namespace ChessBalatro
                 AIDifficulty.Hard => SelectHardMove(board, legalMoves, aiColor),
                 _ => SelectMediumMove(board, legalMoves, aiColor)
             };
+        }
+
+        /// <summary>
+        /// Determina el tipo de pieza prohibido por el estado de "Intimidación" (Dama si tiene jugadas legales;
+        /// en su defecto Torre si tiene jugadas legales).
+        /// </summary>
+        public static PieceType? GetForbiddenIntimidationPieceType(BoardState board, PieceColor aiColor, List<Move> legalMoves = null)
+        {
+            if (board == null || board.IntimidatedTurnsRemaining <= 0 || board.IntimidatedColor != aiColor)
+            {
+                return null;
+            }
+
+            List<Move> pool = legalMoves ?? MoveValidator.GetAllLegalMoves(board, aiColor);
+            if (pool == null || pool.Count == 0) return null;
+
+            bool hasQueenMoves = pool.Exists(m => m.PieceMoved != null && m.PieceMoved.Type == PieceType.Queen);
+            if (hasQueenMoves) return PieceType.Queen;
+
+            bool hasRookMoves = pool.Exists(m => m.PieceMoved != null && m.PieceMoved.Type == PieceType.Rook);
+            if (hasRookMoves) return PieceType.Rook;
+
+            return null;
+        }
+
+        /// <summary>
+        /// Filtra la lista de movimientos legales excluyendo la pieza de mayor valor intimidada,
+        /// conservando un fallback seguro si la única defensa legal contra jaque depende de esa pieza.
+        /// </summary>
+        public static List<Move> FilterMovesForIntimidation(BoardState board, PieceColor aiColor, List<Move> legalMoves)
+        {
+            if (legalMoves == null || legalMoves.Count == 0) return legalMoves;
+
+            PieceType? forbidden = GetForbiddenIntimidationPieceType(board, aiColor, legalMoves);
+            if (!forbidden.HasValue) return legalMoves;
+
+            List<Move> filtered = legalMoves.FindAll(m => m.PieceMoved == null || m.PieceMoved.Type != forbidden.Value);
+            return filtered.Count > 0 ? filtered : legalMoves;
         }
 
         #region Dificultad Fácil (Easy)

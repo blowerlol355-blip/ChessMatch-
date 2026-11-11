@@ -159,6 +159,12 @@ namespace ChessBalatro
             _isPressed = true;
             _targetScale = Vector3.one * pressScale;
             _targetPos = _originalLocalPos - new Vector3(0, 1.5f, 0);
+
+            Selectable selectable = GetComponent<Selectable>();
+            if (selectable == null || selectable.IsInteractable())
+            {
+                RetroAudioManager.Instance?.PlayTap();
+            }
         }
 
         public void OnPointerUp(PointerEventData eventData)

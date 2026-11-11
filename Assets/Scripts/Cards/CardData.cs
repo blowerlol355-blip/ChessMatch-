@@ -12,10 +12,13 @@ namespace ChessBalatro
     {
         [Header("Identificación y Apariencia")]
         [SerializeField] private string cardName = "Nueva Carta";
+        [SerializeField] private string subtitle = string.Empty;
         [SerializeField, TextArea(2, 4)] private string description = "Efecto de la carta.";
         [SerializeField] private int cost = 3;
         [SerializeField] private Sprite cardSprite;
         [SerializeField] private CardRarity rarity = CardRarity.Common;
+        [SerializeField] private Color auraColor = new Color(0.831f, 0.686f, 0.216f, 1f);
+        [SerializeField] private bool hasCustomAuraColor = false;
 
         [Header("Clasificación de Mejora")]
         [Tooltip("Major_Master = selección de Gran Maestro al inicio de partida. Minor_Perk = mejora menor entre rondas.")]
@@ -28,6 +31,12 @@ namespace ChessBalatro
         {
             get => cardName;
             set => cardName = value;
+        }
+
+        public string Subtitle
+        {
+            get => subtitle;
+            set => subtitle = value;
         }
 
         public string Description
@@ -54,10 +63,29 @@ namespace ChessBalatro
             set => rarity = value;
         }
 
+        public Color AuraColor
+        {
+            get => auraColor;
+            set
+            {
+                auraColor = value;
+                hasCustomAuraColor = true;
+            }
+        }
+
+        public bool HasCustomAuraColor => hasCustomAuraColor;
+
         public UpgradeType UpgradeType
         {
             get => upgradeType;
             set => upgradeType = value;
+        }
+
+        public void SetMasterVisuals(string abilitySubtitle, Color customAura)
+        {
+            subtitle = abilitySubtitle ?? string.Empty;
+            auraColor = customAura;
+            hasCustomAuraColor = true;
         }
 
         /// <summary>

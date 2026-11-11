@@ -13,6 +13,19 @@ namespace ChessBalatro
     /// </summary>
     public class MainMenuController : MonoBehaviour
     {
+        public static MainMenuController Instance { get; private set; }
+
+        public static bool IsFloatingPauseButtonVisible
+        {
+            get
+            {
+                if (Instance == null || !Instance.showOnScreenFallbackUI) return false;
+                if (TutorialController.IsEducationalModeActive || OnboardingManager.IsOnboardingGameplayActive || TutorialHubUI.IsHubOpen || GameManager.SelectedGameMode == GameMode.Arcade || ArcadeSurvivorController.IsArcadeModeActive) return false;
+                GameState state = GameManager.Instance != null ? GameManager.Instance.CurrentState : GameState.MainMenu;
+                return state == GameState.Playing;
+            }
+        }
+
         [Header("Paneles de Pantalla (Canvas uGUI)")]
         [SerializeField] private GameObject mainMenuPanel;
         [SerializeField] private GameObject difficultyPanel;
@@ -69,6 +82,7 @@ namespace ChessBalatro
 
         private void Awake()
         {
+            if (Instance == null) Instance = this;
             if (autoConfigureMobileCanvas)
             {
                 ConfigureCanvasScalerForMobile();
@@ -109,6 +123,7 @@ namespace ChessBalatro
 
         private void OnDestroy()
         {
+            if (Instance == this) Instance = null;
             UnsubscribeGameManagerEvents();
             DestroyCachedTextures();
         }
@@ -272,7 +287,7 @@ namespace ChessBalatro
             {
                 gameOverSubtitleText.text = isVictory
                     ? "Has derrotado al rey rival en Jaque Mate."
-                    : "Tu rey blanco ha sido derrotado en Jaque Mate.";
+                    : "Tu Rey ha caído en Jaque Mate.";
             }
 
             if (gameOverTurnsText != null)
@@ -352,6 +367,12 @@ namespace ChessBalatro
 
         public void OnReturnToMenuClicked()
         {
+            if (GameManager.SelectedGameMode == GameMode.Education)
+            {
+                GameManager.SelectedGameMode = GameMode.ClassicRoguelike;
+            }
+            TutorialController.Instance?.DeactivateForStandardMatch();
+
             if (GameManager.Instance != null)
             {
                 GameManager.Instance.ReturnToMenu();
@@ -466,15 +487,34 @@ namespace ChessBalatro
         private void OnGUI()
         {
             if (!showOnScreenFallbackUI) return;
+            if (TutorialHubUI.IsHubOpen) return;
 
             InitStylesIfNeeded();
 
             GameState state = GameManager.Instance != null ? GameManager.Instance.CurrentState : GameState.MainMenu;
 
-            // 1. Botón de Pausa flotante en la esquina superior durante la partida
+            // 1. Botón de Pausa flotante en la esquina superior durante la partida estándar (oculto en Modo Educativo / Onboarding / Arcade)
+            if (GameManager.SelectedGameMode == GameMode.Arcade || ArcadeSurvivorController.IsArcadeModeActive)
+            {
+                if (pauseTriggerButton != null && pauseTriggerButton.gameObject != gameObject)
+                {
+                    pauseTriggerButton.gameObject.SetActive(false);
+                }
+                return;
+            }
+
             if (state == GameState.Playing)
             {
-                DrawFloatingPauseButton();
+                bool showPause = !TutorialController.IsEducationalModeActive && !OnboardingManager.IsOnboardingGameplayActive;
+                if (pauseTriggerButton != null && pauseTriggerButton.gameObject != gameObject)
+                {
+                    pauseTriggerButton.gameObject.SetActive(showPause);
+                }
+
+                if (showPause)
+                {
+                    DrawFloatingPauseButton();
+                }
                 return;
             }
 
@@ -508,9 +548,10 @@ namespace ChessBalatro
 
         private void DrawFloatingPauseButton()
         {
+            float safeTop = Mathf.Max(0f, Screen.height - Screen.safeArea.yMax);
             float btnSize = 44f;
             float margin = 16f;
-            Rect btnRect = new Rect(Screen.width - btnSize - margin, margin, btnSize, btnSize);
+            Rect btnRect = new Rect(Screen.width - btnSize - margin, safeTop + margin, btnSize, btnSize);
 
             if (GUI.Button(btnRect, "❚❚", _secondaryButtonStyle))
             {
@@ -521,7 +562,7 @@ namespace ChessBalatro
         private void DrawOnGuiMainMenu()
         {
             float panelWidth = Mathf.Min(340f, Screen.width * 0.88f);
-            float panelHeight = 310f;
+            float panelHeight = 402f;
             float posX = (Screen.width - panelWidth) * 0.5f;
             float posY = (Screen.height - panelHeight) * 0.5f;
 
@@ -534,7 +575,7 @@ namespace ChessBalatro
             GUILayout.Label("CHESS BALATRO", _titleStyle);
             GUILayout.Label("Roguelike Chess Battles", _subtitleStyle);
 
-            GUILayout.Space(14);
+            GUILayout.Space(12);
 
             // Insignia de dificultad actual
             AIDifficulty currentDiff = GameManager.Instance != null ? GameManager.Instance.SelectedDifficulty : AIDifficulty.Medium;
@@ -542,26 +583,42 @@ namespace ChessBalatro
             GUILayout.Label($"● DIFICULTAD: {DifficultySelectorUI.GetDifficultyDisplayName(currentDiff).ToUpperInvariant()}", _subtitleStyle);
             GUI.color = Color.white;
 
-            GUILayout.Space(16);
+            GUILayout.Space(14);
 
             // Botón Jugar
-            if (GUILayout.Button("▶  JUGAR", _primaryButtonStyle, GUILayout.Height(46)))
+            if (GUILayout.Button("▶  JUGAR", _primaryButtonStyle, GUILayout.Height(42)))
             {
                 OnPlayClicked();
             }
 
-            GUILayout.Space(8);
+            GUILayout.Space(6);
+
+            // Botón Modo Arcade (Survivors)
+            if (GUILayout.Button("⚡  MODO ARCADE (SURVIVORS)", _secondaryButtonStyle, GUILayout.Height(38)))
+            {
+                GameManager.Instance?.StartArcadeMode();
+            }
+
+            GUILayout.Space(6);
+
+            // Botón Tutorial Guiado (Centro de Tutoriales: Todo el Juego)
+            if (GUILayout.Button("🎓  TUTORIAL DEL JUEGO", _secondaryButtonStyle, GUILayout.Height(36)))
+            {
+                OnboardingManager.EnsureInstance().OpenTutorialHub();
+            }
+
+            GUILayout.Space(6);
 
             // Botón Dificultad
-            if (GUILayout.Button("⚙  DIFICULTAD IA", _secondaryButtonStyle, GUILayout.Height(38)))
+            if (GUILayout.Button("⚙  DIFICULTAD IA", _secondaryButtonStyle, GUILayout.Height(34)))
             {
                 OnOpenDifficultyClicked();
             }
 
-            GUILayout.Space(8);
+            GUILayout.Space(6);
 
             // Botón Salir
-            if (GUILayout.Button("✕  SALIR", _dangerButtonStyle, GUILayout.Height(36)))
+            if (GUILayout.Button("✕  SALIR", _dangerButtonStyle, GUILayout.Height(34)))
             {
                 OnQuitClicked();
             }
@@ -624,7 +681,7 @@ namespace ChessBalatro
         private void DrawOnGuiPauseMenu()
         {
             float panelWidth = Mathf.Min(320f, Screen.width * 0.86f);
-            float panelHeight = 240f;
+            float panelHeight = 290f;
             float posX = (Screen.width - panelWidth) * 0.5f;
             float posY = (Screen.height - panelHeight) * 0.5f;
 
@@ -637,14 +694,21 @@ namespace ChessBalatro
             GUILayout.Label("PARTIDA PAUSADA", _titleStyle);
             GUILayout.Label("El reloj táctico está detenido", _subtitleStyle);
 
-            GUILayout.Space(20);
+            GUILayout.Space(16);
 
             if (GUILayout.Button("▶  REANUDAR", _primaryButtonStyle, GUILayout.Height(44)))
             {
                 OnResumeClicked();
             }
 
-            GUILayout.Space(10);
+            GUILayout.Space(8);
+
+            if (GUILayout.Button("★  TUTORIALES DEL JUEGO", _secondaryButtonStyle, GUILayout.Height(38)))
+            {
+                OnboardingManager.EnsureInstance().OpenTutorialHub();
+            }
+
+            GUILayout.Space(8);
 
             if (GUILayout.Button("⌂  MENÚ PRINCIPAL", _secondaryButtonStyle, GUILayout.Height(38)))
             {
@@ -674,7 +738,7 @@ namespace ChessBalatro
 
             string sub = _lastGameOverIsVictory
                 ? "Has derrotado al Rey rival en Jaque Mate."
-                : "Tu Rey Blanco ha caído en Jaque Mate.";
+                : "Tu Rey ha caído en Jaque Mate.";
             GUILayout.Label(sub, _subtitleStyle);
             GUILayout.Label($"Turnos completados: <b>{_lastGameOverTurns}</b>", _subtitleStyle);
 

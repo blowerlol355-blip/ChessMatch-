@@ -45,6 +45,7 @@ namespace ChessBalatro
         public string PlayerName => playerName;
         public int PlayerElo => playerElo;
         public string PlayerRank => playerRank;
+        public Rect LastBadgeScreenRect { get; private set; }
 
         private void Awake()
         {
@@ -243,12 +244,17 @@ namespace ChessBalatro
             float badgeH = 58f * scale;
 
             float bobY = Mathf.Sin(Time.time * bobbingFrequency) * bobbingAmplitude * scale;
+            float onboardingOffset = OnboardingManager.IsOnboardingActive ? (48f * scale) : 0f;
             float posX = placeOnTopRight
                 ? Screen.width - badgeW - (screenOffset.x * scale)
                 : (screenOffset.x * scale);
-            float posY = (screenOffset.y * scale) + bobY;
+            float posY = (screenOffset.y * scale) + onboardingOffset + bobY;
 
             Rect badgeRect = new Rect(posX, posY, badgeW, badgeH);
+            if (Event.current.type == EventType.Repaint)
+            {
+                LastBadgeScreenRect = badgeRect;
+            }
 
             // Sombra pixel art dura de 32-bits (desfase 3px hacia abajo-derecha)
             Rect shadowRect = new Rect(posX + 3, posY + 3, badgeW, badgeH);

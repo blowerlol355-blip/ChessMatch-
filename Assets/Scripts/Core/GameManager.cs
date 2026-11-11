@@ -33,6 +33,7 @@ namespace ChessBalatro
     public class MatchConfig
     {
         public CardData startingCard;
+        public string startingMasterName;
         public PieceColor playerColor = PieceColor.White;
         public float timeLimitSeconds = 0f; // 0 = Sin límite, 180 = 3 min, 300 = 5 min, 600 = 10 min
         public AIDifficulty aiDifficulty = AIDifficulty.Medium;
@@ -50,6 +51,8 @@ namespace ChessBalatro
         public static GameManager Instance { get; private set; }
 
         public static GameMode SelectedGameMode = GameMode.ClassicRoguelike;
+        public static bool PendingOpenEducationSelector = false;
+        public static int PendingEducationLessonIndex = 0;
         public GameMode CurrentGameMode => SelectedGameMode;
 
         // Configuración y reloj de partida rápida
@@ -188,8 +191,8 @@ namespace ChessBalatro
         {
             if (currentState != GameState.Playing) return;
 
-            // En ajedrez estándar, el jugador controla Blancas y la IA Negras
-            bool isVictory = (matedColor == PieceColor.Black);
+            PieceColor humanColor = CurrentMatchConfig != null ? CurrentMatchConfig.playerColor : PieceColor.White;
+            bool isVictory = (matedColor != humanColor);
             int totalTurns = boardView?.BoardState != null ? boardView.BoardState.FullmoveNumber : 1;
 
             SetState(GameState.GameOver);
@@ -275,6 +278,46 @@ namespace ChessBalatro
         }
 
         /// <summary>
+        /// Inicia el Modo Arcade ("Asedio de 15 Minutos / Chess Survivors").
+        /// </summary>
+        public void StartArcadeMode()
+        {
+            Debug.Log("<color=#FFD700><b>[GameManager] Iniciando Modo Arcade (Chess Survivors)...</b></color>");
+            ResolveReferences();
+            SelectedGameMode = GameMode.Arcade;
+
+            if (TutorialController.Instance != null)
+            {
+                TutorialController.Instance.DeactivateForStandardMatch();
+            }
+
+            PetrosianDefenseEffect.ForceReset();
+            (CaptureRewardManager.Instance ?? FindAnyObjectByType<CaptureRewardManager>())?.ResetMatchProgress();
+
+            if (inputHandler != null)
+            {
+                inputHandler.CancelPendingMoves();
+                inputHandler.EnableAI = false;
+                inputHandler.enabled = false;
+            }
+
+            if (cardManager != null)
+            {
+                cardManager.ClearTurnEffects();
+            }
+
+            ArcadeSurvivorController arcade = GetComponent<ArcadeSurvivorController>() ?? FindAnyObjectByType<ArcadeSurvivorController>(FindObjectsInactive.Include);
+            if (arcade == null)
+            {
+                GameObject target = boardView != null ? boardView.gameObject : gameObject;
+                arcade = target.AddComponent<ArcadeSurvivorController>();
+            }
+
+            SetState(GameState.Playing);
+            arcade.StartArcadeRun();
+        }
+
+        /// <summary>
         /// Inicia el Modo Educativo cargando la secuencia de lecciones interactivas.
         /// </summary>
         public void StartEducationMode(int lessonIndex = 0)
@@ -283,6 +326,9 @@ namespace ChessBalatro
             ResolveReferences();
             SelectedGameMode = GameMode.Education;
             SetState(GameState.Playing);
+
+            inputHandler?.CancelPendingMoves();
+            (CaptureRewardManager.Instance ?? FindAnyObjectByType<CaptureRewardManager>())?.ResetMatchProgress();
 
             if (cardManager != null)
             {
@@ -296,17 +342,24 @@ namespace ChessBalatro
                 controller = target.AddComponent<TutorialController>();
             }
 
-            if (FindAnyObjectByType<TutorialUI>() == null)
+            TutorialUI ui = FindAnyObjectByType<TutorialUI>();
+            if (ui == null)
             {
                 GameObject target = boardView != null ? boardView.gameObject : gameObject;
-                target.AddComponent<TutorialUI>();
+                ui = target.AddComponent<TutorialUI>();
             }
 
             if (controller != null)
             {
                 controller.StartEducationMode(lessonIndex + 1);
+                if (PendingOpenEducationSelector)
+                {
+                    PendingOpenEducationSelector = false;
+                    ui?.OpenLessonSelector();
+                }
                 return;
             }
+            PendingOpenEducationSelector = false;
 
             TutorialLessonManager tutorial = FindAnyObjectByType<TutorialLessonManager>();
             if (tutorial == null)
@@ -322,34 +375,15 @@ namespace ChessBalatro
         }
 
         /// <summary>
-        /// Provee la lista de cartas iniciales disponibles para el menú rápido de configuración de partida.
+        /// Provee la lista por defecto de las 4 cartas de Gran Maestro (Major_Master) para configurar partida y drafts.
+        /// 1. Tigrán Petrosián - El Tigre de Hierro ("Jaque Anulado")
+        /// 2. Mijaíl Tal - El Mago de Riga ("Bosque Oscuro")
+        /// 3. Judit Polgár - Reina de la Tormenta ("Ataque Implacable")
+        /// 4. Garry Kaspárov - El Ogro de Bakú ("Presión Absoluta")
         /// </summary>
         public static List<CardData> GetAvailableStartingCards()
         {
-            var list = new List<CardData>();
-
-            // 1. Tigrán Petrosián (Defensa Impenetrable)
-            var petrosian = PetrosianCardData.CreateRuntimeInstance();
-            list.Add(petrosian);
-
-            // 2. Peón Acelerado
-            var turboPawn = TurboPawnCardData.CreateInstance();
-            turboPawn.CardSprite = Resources.Load<Sprite>("Pieces/white_pawn");
-            list.Add(turboPawn);
-
-            // 3. Salto de Caballería
-            var knightCard = ScriptableObject.CreateInstance<CardData>();
-            knightCard.Initialize(
-                "Salto de Caballería",
-                "Los Caballos pueden desplazarse 1 casilla ortogonalmente además de su salto tradicional en L.",
-                4,
-                CardRarity.Rare,
-                new KnightBoostEffect()
-            );
-            knightCard.CardSprite = Resources.Load<Sprite>("Pieces/white_knight");
-            list.Add(knightCard);
-
-            return list;
+            return MasterCardDatabase.CreateDefaultMasterCards();
         }
 
         private void Update()
@@ -392,20 +426,49 @@ namespace ChessBalatro
         /// </summary>
         public void StartNewGame()
         {
-            if (SelectedGameMode == GameMode.Education)
+            if (OnboardingManager.IsOnboardingGameplayActive)
             {
-                StartEducationMode(0);
+                ResolveReferences();
+                SetState(GameState.Playing);
+                OnboardingManager.Instance?.InitializeGuidedGameplayScene();
                 return;
             }
 
+            if (SelectedGameMode == GameMode.Arcade)
+            {
+                StartArcadeMode();
+                return;
+            }
+
+            if (SelectedGameMode == GameMode.Education)
+            {
+                ArcadeSurvivorController.Instance?.CleanupArcadeSession();
+                if (inputHandler != null) inputHandler.enabled = true;
+                int startLessonIdx = Mathf.Max(0, PendingEducationLessonIndex);
+                PendingEducationLessonIndex = 0;
+                StartEducationMode(startLessonIdx);
+                return;
+            }
+
+            ArcadeSurvivorController.Instance?.CleanupArcadeSession();
+            if (inputHandler != null) inputHandler.enabled = true;
+
             Debug.Log("<color=green><b>[GameManager] Iniciando nueva partida (StartNewGame)...</b></color>");
             ResolveReferences();
+
+            if (TutorialController.Instance != null)
+            {
+                TutorialController.Instance.DeactivateForStandardMatch();
+            }
+            BoardView.EnsureCanvasScalersConfigured();
 
             // Sincronizar configuraciones rápidas
             if (CurrentMatchConfig != null)
             {
                 selectedDifficulty = CurrentMatchConfig.aiDifficulty;
-                ActiveMasterCard = CurrentMatchConfig.startingCard;
+                ActiveMasterCard = (CurrentMatchConfig.startingCard != null || !string.IsNullOrEmpty(CurrentMatchConfig.startingMasterName))
+                    ? MasterCardDatabase.CloneCardWithFreshEffect(CurrentMatchConfig.startingCard, CurrentMatchConfig.startingMasterName)
+                    : null;
 
                 if (CurrentMatchConfig.HasTimeLimit)
                 {
@@ -425,7 +488,11 @@ namespace ChessBalatro
 
             try
             {
-                // Limpieza estricta de piezas y cartas previas para evitar memory leaks
+                // Limpieza estricta de piezas, corutinas pendientes, economía y cartas previas para evitar memory leaks
+                PetrosianDefenseEffect.ForceReset();
+                inputHandler?.CancelPendingMoves();
+                (CaptureRewardManager.Instance ?? FindAnyObjectByType<CaptureRewardManager>())?.ResetMatchProgress();
+
                 if (cardManager != null)
                 {
                     cardManager.ClearTurnEffects();
@@ -466,16 +533,52 @@ namespace ChessBalatro
         /// </summary>
         public void RestartGame()
         {
+            if (SelectedGameMode == GameMode.Arcade)
+            {
+                StartArcadeMode();
+                return;
+            }
+
             ResolveReferences();
+
+            PetrosianDefenseEffect.ForceReset();
+            inputHandler?.CancelPendingMoves();
+            (CaptureRewardManager.Instance ?? FindAnyObjectByType<CaptureRewardManager>())?.ResetMatchProgress();
 
             if (cardManager != null)
             {
                 cardManager.ClearTurnEffects();
             }
 
+            if (ActiveMasterCard != null)
+            {
+                ActiveMasterCard = MasterCardDatabase.CloneCardWithFreshEffect(ActiveMasterCard, ActiveMasterCard.CardName);
+            }
+            else if (CurrentMatchConfig != null && (CurrentMatchConfig.startingCard != null || !string.IsNullOrEmpty(CurrentMatchConfig.startingMasterName)))
+            {
+                ActiveMasterCard = MasterCardDatabase.CloneCardWithFreshEffect(CurrentMatchConfig.startingCard, CurrentMatchConfig.startingMasterName);
+            }
+
+            if (CurrentMatchConfig != null && CurrentMatchConfig.HasTimeLimit)
+            {
+                WhiteRemainingTime = CurrentMatchConfig.timeLimitSeconds;
+                BlackRemainingTime = CurrentMatchConfig.timeLimitSeconds;
+            }
+
             if (boardView != null)
             {
                 boardView.InitializeGame();
+            }
+
+            if (inputHandler != null && CurrentMatchConfig != null)
+            {
+                inputHandler.EnableAI = true;
+                inputHandler.AIColor = CurrentMatchConfig.playerColor == PieceColor.White ? PieceColor.Black : PieceColor.White;
+                inputHandler.AIDifficulty = CurrentMatchConfig.aiDifficulty;
+                if (CurrentMatchConfig.playerColor == PieceColor.Black)
+                {
+                    inputHandler.TriggerAITurn();
+                }
             }
 
             if (cardManager != null)
@@ -492,6 +595,17 @@ namespace ChessBalatro
         public void ReturnToMenu()
         {
             ResolveReferences();
+
+            ArcadeSurvivorController.Instance?.CleanupArcadeSession();
+            if (inputHandler != null) inputHandler.enabled = true;
+            PetrosianDefenseEffect.ForceReset();
+            inputHandler?.CancelPendingMoves();
+            (CaptureRewardManager.Instance ?? FindAnyObjectByType<CaptureRewardManager>())?.ResetMatchProgress();
+
+            if (TutorialController.Instance != null)
+            {
+                TutorialController.Instance.DeactivateForStandardMatch();
+            }
 
             if (cardManager != null)
             {

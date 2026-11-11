@@ -23,10 +23,12 @@ namespace ChessBalatro
         /// Utilizado por MoveValidator y BoardState para neutralizar la condición de jaque.
         /// </summary>
         public static bool IsShieldActive { get; private set; } = false;
+        public static PieceColor ProtectedColor { get; private set; } = PieceColor.White;
 
         public static void ForceReset()
         {
             IsShieldActive = false;
+            ProtectedColor = PieceColor.White;
         }
 
         private bool _isActive = false;
@@ -37,7 +39,7 @@ namespace ChessBalatro
         {
             if (board == null) return false;
             // El jugador puede activar el Escudo de Hierro en su turno para anular jaque o como blindaje preventivo
-            return turnColor == PieceColor.White;
+            return board.FindKing(turnColor).HasValue;
         }
 
         public void ApplyEffect(BoardState board, BoardCoord? targetCoord = null)
@@ -45,13 +47,14 @@ namespace ChessBalatro
             if (board == null) return;
 
             _isActive = true;
+            ProtectedColor = board.CurrentTurn;
             IsShieldActive = true;
 
-            // Localizar la posición del Rey blanco para anclar el escudo visual
-            BoardCoord kingCoord = FindKingCoord(board, PieceColor.White);
+            // Localizar la posición del Rey activo para anclar el escudo visual
+            BoardCoord kingCoord = FindKingCoord(board, ProtectedColor);
 
-            Debug.Log("<color=#FFD700><b>[PetrosianDefenseEffect] ¡Escudo de Petrosián activado! " +
-                      $"Rey en {kingCoord}</b></color>");
+            SafeLog("<color=#FFD700><b>[PetrosianDefenseEffect] ¡Escudo de Petrosián activado! " +
+                    $"Rey en {kingCoord}</b></color>");
 
             // Notificar a los sistemas visuales y al HUD
             OnShieldActivated?.Invoke(kingCoord);
@@ -70,8 +73,21 @@ namespace ChessBalatro
             {
                 _isActive = false;
                 IsShieldActive = false;
-                Debug.Log("<color=#FFD700>[PetrosianDefenseEffect] Escudo disuelto al finalizar el turno.</color>");
+                ProtectedColor = PieceColor.White;
+                SafeLog("<color=#FFD700>[PetrosianDefenseEffect] Escudo disuelto al finalizar el turno.</color>");
                 OnShieldDeactivated?.Invoke();
+            }
+        }
+
+        private static void SafeLog(string message)
+        {
+            try
+            {
+                Debug.Log(message);
+            }
+            catch (System.Exception)
+            {
+                // Ignorar en entornos de test .NET sin runtime nativo de Unity
             }
         }
 

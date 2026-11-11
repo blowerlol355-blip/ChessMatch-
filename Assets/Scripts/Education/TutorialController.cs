@@ -32,6 +32,10 @@ namespace ChessBalatro
 
         private readonly List<TutorialLessonData> _lessons = new List<TutorialLessonData>();
 
+        public static bool IsEducationalModeActive =>
+            Instance != null &&
+            (Instance.isLessonActive || (TutorialUI.Instance != null && TutorialUI.Instance.IsSelectorOpen));
+
         public IReadOnlyList<TutorialLessonData> Lessons => _lessons;
         public TutorialLessonData CurrentLesson => GetLessonById(currentLessonId);
         public int CurrentLessonId => currentLessonId;
@@ -68,11 +72,17 @@ namespace ChessBalatro
             ResolveReferences();
         }
 
+        private void OnDisable()
+        {
+            RestoreStandardHUD();
+        }
+
         private void OnDestroy()
         {
             if (Instance == this) Instance = null;
             UnsubscribeEvents();
             PetrosianDefenseEffect.ForceReset();
+            RestoreStandardHUD();
         }
 
         private void ResolveReferences()
@@ -331,6 +341,19 @@ namespace ChessBalatro
             isLessonActive = true;
             cardWasUsedInLesson = false;
 
+            // Ocultar paneles estándar del juego para evitar solapamientos durante el tutorial
+            HideStandardHUD();
+
+            // Limpiar cualquier anuncio o banner previo en pantalla (ej. Rey Ahogado, Jaque Mate)
+            if (_cachedGameHUDView == null)
+            {
+                _cachedGameHUDView = FindAnyObjectByType<GameHUDView>(FindObjectsInactive.Include);
+            }
+            if (_cachedGameHUDView != null)
+            {
+                _cachedGameHUDView.ClearBanner();
+            }
+
             // Resetear escudo de Petrosián
             PetrosianDefenseEffect.ForceReset();
 
@@ -371,6 +394,9 @@ namespace ChessBalatro
         {
             if (cardManager == null) cardManager = FindAnyObjectByType<CardManager>();
             if (cardManager == null) return;
+
+            cardManager.EnsureCanvasAndHandView();
+            BoardView.EnsureCanvasScalersConfigured();
 
             cardManager.ClearTurnEffects();
             cardManager.HandView?.ClearHand();
@@ -519,6 +545,11 @@ namespace ChessBalatro
             // Guardar progreso en PlayerPrefs
             SaveLessonProgress(lesson.lessonId);
 
+            if (_cachedGameHUDView != null)
+            {
+                _cachedGameHUDView.ClearBanner();
+            }
+
             if (SettingsManager.Instance != null)
             {
                 SettingsManager.Instance.TriggerHapticFeedback();
@@ -533,6 +564,11 @@ namespace ChessBalatro
             isLessonFailed = true;
             isLessonCompleted = false;
 
+            if (_cachedGameHUDView != null)
+            {
+                _cachedGameHUDView.ClearBanner();
+            }
+
             if (inputHandler != null)
             {
                 inputHandler.ClearMoveFilter();
@@ -544,11 +580,13 @@ namespace ChessBalatro
 
         public void RestartCurrentLesson()
         {
+            if (_cachedGameHUDView != null) _cachedGameHUDView.ClearBanner();
             LoadLesson(currentLessonId);
         }
 
         public void AdvanceToNextLesson()
         {
+            if (_cachedGameHUDView != null) _cachedGameHUDView.ClearBanner();
             if (currentLessonId < _lessons.Count)
             {
                 LoadLesson(currentLessonId + 1);
@@ -561,6 +599,7 @@ namespace ChessBalatro
 
         public void PreviousLesson()
         {
+            if (_cachedGameHUDView != null) _cachedGameHUDView.ClearBanner();
             if (currentLessonId > 1)
             {
                 LoadLesson(currentLessonId - 1);
@@ -569,8 +608,36 @@ namespace ChessBalatro
 
         public void ExitTutorial()
         {
+            DeactivateForStandardMatch();
+
+            if (GameManager.SelectedGameMode == GameMode.Education)
+            {
+                GameManager.SelectedGameMode = GameMode.ClassicRoguelike;
+            }
+
+            if (GameManager.Instance != null)
+            {
+                GameManager.Instance.ReturnToMenu();
+            }
+        }
+
+        /// <summary>
+        /// Limpia por completo el Modo Educativo y restaura el HUD estándar (Selector de IA e Historial de Jugadas),
+        /// la cámara y los filtros de movimiento para iniciar o volver a una partida normal sin solapamientos.
+        /// </summary>
+        public void DeactivateForStandardMatch()
+        {
             isLessonActive = false;
             UnsubscribeEvents();
+
+            if (_cachedGameHUDView == null)
+            {
+                _cachedGameHUDView = FindAnyObjectByType<GameHUDView>(FindObjectsInactive.Include);
+            }
+            if (_cachedGameHUDView != null)
+            {
+                _cachedGameHUDView.ClearBanner();
+            }
 
             if (inputHandler != null)
             {
@@ -580,11 +647,88 @@ namespace ChessBalatro
 
             PetrosianDefenseEffect.ForceReset();
 
-            if (GameManager.Instance != null)
+            TutorialUI.Instance?.NotifyExitedTutorial();
+
+            // Garantizar restauración de paneles estándar de partida
+            RestoreStandardHUD();
+        }
+
+        #region Limpieza y Restauración de HUD Estándar
+
+        private DifficultySelectorUI _cachedDifficultySelector;
+        private GameHUDView _cachedGameHUDView;
+        private bool _savedDifficultySelectorActive = true;
+        private bool _savedMoveHistoryVisible = true;
+        private bool _savedDiffCaptured = false;
+        private bool _savedHistoryCaptured = false;
+
+        public void HideStandardHUD()
+        {
+            if (_cachedDifficultySelector == null)
             {
-                GameManager.Instance.ReturnToMenu();
+                _cachedDifficultySelector = FindAnyObjectByType<DifficultySelectorUI>(FindObjectsInactive.Include);
+            }
+
+            if (_cachedDifficultySelector != null)
+            {
+                if (!_savedDiffCaptured)
+                {
+                    _savedDifficultySelectorActive = _cachedDifficultySelector.ShowOnScreenUI;
+                    _savedDiffCaptured = true;
+                }
+                _cachedDifficultySelector.SetVisible(false);
+            }
+
+            if (_cachedGameHUDView == null)
+            {
+                _cachedGameHUDView = FindAnyObjectByType<GameHUDView>(FindObjectsInactive.Include);
+            }
+
+            if (_cachedGameHUDView != null)
+            {
+                if (!_savedHistoryCaptured)
+                {
+                    _savedMoveHistoryVisible = _cachedGameHUDView.ShowMoveHistory;
+                    _savedHistoryCaptured = true;
+                }
+                _cachedGameHUDView.SetMoveHistoryVisible(false);
             }
         }
+
+        public void RestoreStandardHUD()
+        {
+            if (!_savedDiffCaptured && !_savedHistoryCaptured) return;
+
+            if (_savedDiffCaptured)
+            {
+                if (_cachedDifficultySelector == null)
+                {
+                    _cachedDifficultySelector = FindAnyObjectByType<DifficultySelectorUI>(FindObjectsInactive.Include);
+                }
+
+                if (_cachedDifficultySelector != null)
+                {
+                    _cachedDifficultySelector.SetVisible(_savedDifficultySelectorActive);
+                }
+                _savedDiffCaptured = false;
+            }
+
+            if (_savedHistoryCaptured)
+            {
+                if (_cachedGameHUDView == null)
+                {
+                    _cachedGameHUDView = FindAnyObjectByType<GameHUDView>(FindObjectsInactive.Include);
+                }
+
+                if (_cachedGameHUDView != null)
+                {
+                    _cachedGameHUDView.SetMoveHistoryVisible(_savedMoveHistoryVisible);
+                }
+                _savedHistoryCaptured = false;
+            }
+        }
+
+        #endregion
 
         #endregion
 
